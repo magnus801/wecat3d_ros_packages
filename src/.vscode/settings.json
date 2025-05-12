@@ -1,0 +1,18 @@
+{
+    "python.autoComplete.extraPaths": [
+        "/home/atharva/project-arista/ws/arista_robot_ws/install/arista_video_stream/local/lib/python3.10/dist-packages",
+        "/home/atharva/project-arista/ws/arista_robot_ws/install/arista_serial_com/lib/python3.10/site-packages",
+        "/home/atharva/project-arista/ws/arista_robot_ws/install/arista_robot_core/lib/python3.10/site-packages",
+        "/home/atharva/project-arista/ws/arista_robot_ws/install/arista_interfaces/local/lib/python3.10/dist-packages",
+        "/opt/ros/humble/lib/python3.10/site-packages",
+        "/opt/ros/humble/local/lib/python3.10/dist-packages"
+    ],
+    "python.analysis.extraPaths": [
+        "/home/atharva/project-arista/ws/arista_robot_ws/install/arista_video_stream/local/lib/python3.10/dist-packages",
+        "/home/atharva/project-arista/ws/arista_robot_ws/install/arista_serial_com/lib/python3.10/site-packages",
+        "/home/atharva/project-arista/ws/arista_robot_ws/install/arista_robot_core/lib/python3.10/site-packages",
+        "/home/atharva/project-arista/ws/arista_robot_ws/install/arista_interfaces/local/lib/python3.10/dist-packages",
+        "/opt/ros/humble/lib/python3.10/site-packages",
+        "/opt/ros/humble/local/lib/python3.10/dist-packages"
+    ]
+}
