@@ -1,213 +1,170 @@
 #include <iostream>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <signal.h>
+#include <csignal>
 #include <unistd.h>
-
+#include <cstring>
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
 #include <sensor_msgs/point_cloud2_iterator.hpp>
 #include <pcl/point_cloud.h>
 #include <pcl/point_types.h>
 #include <pcl/io/pcd_io.h>
-
 #include "EthernetScannerSDK.h"
 #include "EthernetScannerSDKDefine.h"
 
-#define WIDTH_X    1280
-#define HEIGHT_Z   100
-#define BUFFER_SIZE (WIDTH_X * HEIGHT_Z)
+#define WIDTH_X      1280
+#define HEIGHT_Z     1024
+#define BUFFER_SIZE  WIDTH_X
 
-volatile bool keepRunning = true;
+volatile bool keep_running = true;
 
-void handleSigint(int /*sig*/) {
-    std::cout << "\nCtrl+C received. Stopping...\n";
-    keepRunning = false;
+void signal_handler(int) {
+    keep_running = false;
+    std::cout << "\nCtrl+C detected. Shutting down...\n";
 }
 
-void sendCommand(void* handle, const char* cmd) {
-    int result = EthernetScanner_WriteData(handle, (char*)cmd, strlen(cmd));
-    std::cout << "Sent: " << cmd << " (code " << result << ")\n";
-}
-
-void readProperty(void* handle, const char* name) {
-    char buffer[ETHERNETSCANNER_BUFFERSIZEMAX] = {0};
-    int result = EthernetScanner_ReadData(handle, (char*)name, buffer, ETHERNETSCANNER_BUFFERSIZEMAX, 0);
-    if (result == 0)
-        std::cout << " " << name << " = " << buffer << "\n";
-    else
-        std::cout << " Failed to read " << name << " (code " << result << ")\n";
+void send_command(void* handle, const char* cmd) {
+    int ret = EthernetScanner_WriteData(handle, (char*)cmd, strlen(cmd));
+    std::cout << "Command Sent: " << cmd << " [Return Code: " << ret << "]\n";
 }
 
 int main(int argc, char* argv[]) {
-    // --- ROS2 init & signal handler ---
     rclcpp::init(argc, argv);
-    signal(SIGINT, handleSigint);
-
-    auto node = rclcpp::Node::make_shared("wecat3d_profile_publisher");
-    auto publisher = node->create_publisher<sensor_msgs::msg::PointCloud2>("wecat3d/pointcloud", 10);
-
+    signal(SIGINT, signal_handler);
+    auto node = rclcpp::Node::make_shared("wecat3d_runtime_node");
+    auto pub = node->create_publisher<sensor_msgs::msg::PointCloud2>("/wecat3d/pointcloud", 10);
     pcl::PointCloud<pcl::PointXYZ>::Ptr merged_cloud(new pcl::PointCloud<pcl::PointXYZ>);
 
-    // --- Connect to sensor ---
-    char ip[]   = "192.168.100.1";
-    char port[] = "32001";
-    std::cout << "Connecting to weCat3D at " << ip << ":" << port << "...\n";
-    void* handle = EthernetScanner_Connect(ip, port, 1000);
+    const char* ip = "192.168.100.1";
+    const char* port = "32001";
+    void* handle = EthernetScanner_Connect((char*)ip, (char*)port, 1000);
     if (!handle) {
-        std::cerr << "Connection failed.\n";
+        RCLCPP_ERROR(node->get_logger(), "Failed to connect to sensor at %s:%s", ip, port);
         return -1;
     }
 
-    int status = 0, attempts = 0;
-    while (status != 3 && attempts++ < 10) {
+    int status = 0;
+    for (int tries = 0; tries < 10 && status != 3; ++tries) {
         usleep(200000);
         EthernetScanner_GetConnectStatus(handle, &status);
     }
     if (status != 3) {
-        std::cerr << "Sensor not ready. Status: " << status << "\n";
+        RCLCPP_ERROR(node->get_logger(), "Sensor not ready. Status: %d", status);
         EthernetScanner_Disconnect(handle);
         return -1;
     }
 
-    // --- Configure sensor ---
-    sendCommand(handle, "SetTriggerSource=2 \r");              // encoder trigger
-    sendCommand(handle, "SetTriggerEncoderStep=1\r");         // every 5 ticks
-    sendCommand(handle, "SetEncoderTriggerFunction=1\r");     // quadrature decoding
-    sendCommand(handle, "ResetEncoder\r");
-
-    sendCommand(handle, "SetRangeImageNrProfiles=1\r");
-    sendCommand(handle, "SetSignalSelection=1\r");
-
-    sendCommand(handle, "SetAutoExposureMode=0\r");
-    sendCommand(handle, "SetExposureTime=150\r");  
-
-    sendCommand(handle, "SetAcquisitionStop\r");
+    send_command(handle, "SetAcquisitionStop\r");
     usleep(500000);
-    sendCommand(handle, "SetLinearizationMode=1\r");
-    sendCommand(handle, "SetInitializeAcquisition\r");
+    send_command(handle, "SetTriggerSource=2\r");
+    send_command(handle, "SetTriggerEncoderStep=3\r");
+    send_command(handle, "SetEncoderTriggerFunction=2\r");
+    send_command(handle, "ResetEncoder\r");
+    send_command(handle, "SetRangeImageNrProfiles=1\r");
+    send_command(handle, "SetROI1OffsetX=0\r");
+    send_command(handle, "SetROI1WidthX=1280\r");
+    send_command(handle, "SetROI1OffsetZ=0\r");
+    send_command(handle, "SetROI1HeightZ=1024\r");
+    send_command(handle, "SetROI1StepX=0\r");
+    send_command(handle, "SetROI1StepZ=0\r");
+    send_command(handle, "SetAutoExposureMode=0\r");
+    send_command(handle, "SetHDR=1\r");
+    send_command(handle, "SetExposureTime=150\r");
+    send_command(handle, "SetExposureTime2=10000\r");
+    send_command(handle, "SetSignalContentZ=1\r");
+    send_command(handle, "SetSignalContentStrength=1\r");
+    send_command(handle, "SetInitializeAcquisition\r");
+    send_command(handle, "SetLinearizationMode=1\r");
+
     EthernetScanner_ResetDllFiFo(handle);
-    sendCommand(handle, "SetAcquisitionStart\r");
+    send_command(handle, "SetAcquisitionStart\r");
 
-    std::cout << "\nReading parameters from sensor:\n";
-    readProperty(handle, "TriggerSource");
-    readProperty(handle, "TriggerEncoderStep");
-    readProperty(handle, "EncoderTriggerFunction");
-    readProperty(handle, "RangeImageNrProfiles");
-    readProperty(handle, "ROI1WidthX");
-    readProperty(handle, "ROI1HeightZ");
-    readProperty(handle, "AutoExposureIntensityRangeMin");
-    readProperty(handle, "AutoExposureIntensityRangeMax");
+    int32_t base_enc = 0;
+    bool initialized = false;
+    float total_y_distance = 0.0f;
+    RCLCPP_INFO(node->get_logger(), "Acquisition started. Waiting for HDR profiles...");
 
-    std::cout << "\nStreaming profiles... (Ctrl+C to stop)\n";
+    while (keep_running && rclcpp::ok()) {
+        double xBuf1[BUFFER_SIZE], zBuf1[BUFFER_SIZE];
+        int iBuf1[BUFFER_SIZE], wBuf1[BUFFER_SIZE];
+        unsigned int rawEnc1;
+        unsigned char usrIO1;
+        int picCount1;
 
-    // --- Encoder tracking variables ---
-    int32_t baseEncoder = 0;
-    int32_t lastRaw     = 0;
-    bool    initialized = false;
+        double xBuf2[BUFFER_SIZE], zBuf2[BUFFER_SIZE];
+        int iBuf2[BUFFER_SIZE], wBuf2[BUFFER_SIZE];
+        unsigned int rawEnc2;
+        unsigned char usrIO2;
+        int picCount2;
 
-    while (keepRunning && rclcpp::ok()) {
-        // buffers for profile data
-        double xBuffer[BUFFER_SIZE] = {0};
-        double zBuffer[BUFFER_SIZE] = {0};
-        int intensityBuffer[BUFFER_SIZE]     = {0};
-        int signalWidthBuffer[BUFFER_SIZE]   = {0};
-        unsigned int encoderRaw               = 0;
-        unsigned char usrIO                   = 0;
-        int pictureCount                      = 0;
+        int n1 = EthernetScanner_GetXZIExtended(handle, xBuf1, zBuf1, iBuf1, wBuf1, BUFFER_SIZE, &rawEnc1, &usrIO1, 1000, nullptr, 0, &picCount1);
+        if (n1 != WIDTH_X) continue;
 
-        int numPoints = EthernetScanner_GetXZIExtended(
-            handle,
-            xBuffer, zBuffer,
-            intensityBuffer, signalWidthBuffer,
-            BUFFER_SIZE,
-            &encoderRaw,
-            &usrIO,
-            1000, nullptr, 0, &pictureCount
-        );
+        int n2 = EthernetScanner_GetXZIExtended(handle, xBuf2, zBuf2, iBuf2, wBuf2, BUFFER_SIZE, &rawEnc2, &usrIO2, 1000, nullptr, 0, &picCount2);
+        if (n2 != WIDTH_X) continue;
 
-        if (numPoints > 0) {
-            // cast raw, initialize baseline
-            int32_t raw = static_cast<int32_t>(encoderRaw);
-            if (!initialized) {
-                baseEncoder = raw;
-                lastRaw     = raw;
-                initialized = true;
-                std::cout << "Base encoder: " << baseEncoder << "\n\n";
+        int32_t raw = static_cast<int32_t>(rawEnc1);
+        if (!initialized) {
+            base_enc = raw;
+            initialized = true;
+        }
+        float y = (raw - base_enc) / 1000.0f;
+        total_y_distance = y;
+
+        sensor_msgs::msg::PointCloud2 msg;
+        msg.header.stamp = node->now();
+        msg.header.frame_id = "map";
+        msg.height = 1;
+        msg.width = n1;
+        msg.is_dense = false;
+        msg.is_bigendian = false;
+        sensor_msgs::PointCloud2Modifier mod(msg);
+        mod.setPointCloud2FieldsByString(1, "xyz");
+        mod.resize(n1);
+        sensor_msgs::PointCloud2Iterator<float> it_x(msg, "x");
+        sensor_msgs::PointCloud2Iterator<float> it_y(msg, "y");
+        sensor_msgs::PointCloud2Iterator<float> it_z(msg, "z");
+
+        pcl::PointCloud<pcl::PointXYZ>::Ptr cur_cloud(new pcl::PointCloud<pcl::PointXYZ>());
+        cur_cloud->width = n1;
+        cur_cloud->height = 1;
+        cur_cloud->is_dense = false;
+        cur_cloud->points.resize(n1);
+
+        for (int i = 0; i < n1; ++i, ++it_x, ++it_y, ++it_z) {
+            int intensity1 = iBuf1[i];
+            int intensity2 = iBuf2[i];  
+            float x, z;
+
+            if (intensity1 >= intensity2) {
+                x = static_cast<float>(xBuf1[i] / 1000.0f);
+                z = static_cast<float>(zBuf1[i] / 1000.0f);
+            } else {
+                x = static_cast<float>(xBuf2[i] / 1000.0f);
+                z = static_cast<float>(zBuf2[i] / 1000.0f);
             }
 
-            // compute relative and delta
-            int32_t relative = raw - baseEncoder;
-            int32_t delta    = raw - lastRaw;
-            lastRaw = raw;
+            *it_x = x;
+            *it_y = y;
+            *it_z = z;
 
-            // y coordinate in meters (relative ticks / 1000)
-            float y_val = static_cast<float>(relative) / 1000.0f;
-
-            // print encoder diagnostics
-            std::cout
-                << "Raw: "      << raw
-                << " | Rel: "   << relative
-                << " | Δ: "     << delta
-                << " | y(m): "  << y_val
-                << std::endl;
-
-            // --- build & publish PointCloud2 ---
-            sensor_msgs::msg::PointCloud2 cloud_msg;
-            cloud_msg.header.stamp    = node->now();
-            cloud_msg.header.frame_id = "map";
-            cloud_msg.height          = 1;
-            cloud_msg.width           = numPoints;
-            cloud_msg.is_dense        = false;
-            cloud_msg.is_bigendian    = false;
-
-            sensor_msgs::PointCloud2Modifier modifier(cloud_msg);
-            modifier.setPointCloud2FieldsByString(1, "xyz");
-            modifier.resize(numPoints);
-
-            sensor_msgs::PointCloud2Iterator<float> iter_x(cloud_msg, "x");
-            sensor_msgs::PointCloud2Iterator<float> iter_y(cloud_msg, "y");
-            sensor_msgs::PointCloud2Iterator<float> iter_z(cloud_msg, "z");
-
-            pcl::PointCloud<pcl::PointXYZ>::Ptr current_cloud(new pcl::PointCloud<pcl::PointXYZ>);
-            current_cloud->width  = numPoints;
-            current_cloud->height = 1;
-            current_cloud->is_dense = false;
-            current_cloud->points.resize(numPoints);
-
-            for (int i = 0; i < numPoints; ++i, ++iter_x, ++iter_y, ++iter_z) {
-                float x = static_cast<float>(xBuffer[i]) / 1000.0f;
-                float z = static_cast<float>(zBuffer[i]) / 1000.0f;
-                *iter_x = x;
-                *iter_y = y_val;
-                *iter_z = z;
-
-                current_cloud->points[i].x = x;
-                current_cloud->points[i].y = y_val;
-                current_cloud->points[i].z = z;
-            }
-
-            *merged_cloud += *current_cloud;
-            pcl::io::savePCDFileASCII("merged.pcd", *merged_cloud);
-            publisher->publish(cloud_msg);
-
-            RCLCPP_INFO(node->get_logger(),
-                "Published %d pts | raw=%d rel=%d Δ=%d",
-                numPoints, raw, relative, delta
-            );
+            cur_cloud->points[i].x = x;
+            cur_cloud->points[i].y = y;
+            cur_cloud->points[i].z = z;
         }
 
-        rclcpp::spin_some(node);
-        usleep(100000);
-    }
-    sendCommand(handle, "SetAcquisitionStop\r");
-    usleep(500000);
+        *merged_cloud += *cur_cloud;
+        pcl::io::savePCDFileBinaryCompressed("merged_encoder_output.pcd", *merged_cloud);
+        pub->publish(msg);
+        RCLCPP_INFO(node->get_logger(), "Published %d points | Y=%.3f m | Total Y=%.3f m", n1, y, total_y_distance);
 
-    // --- clean up ---
+        rclcpp::spin_some(node);
+        usleep(500);
+    }
+
+    send_command(handle, "SetAcquisitionStop\r");
+    usleep(500000);
     EthernetScanner_Disconnect(handle);
-    std::cout << "\nDisconnected.\n";
     rclcpp::shutdown();
+    std::cout << "Sensor disconnected. Shutdown complete.\n";
     return 0;
 }
-

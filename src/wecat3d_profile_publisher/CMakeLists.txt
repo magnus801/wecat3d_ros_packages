@@ -54,9 +54,7 @@ target_link_libraries(encoder_test
   ${PCL_COMMON_LIBRARIES}
   ${Boost_LIBRARIES}
 )
-#
-# Executable 1: profile_publisher_node
-#
+
 add_executable(profile_publisher_node src/profile_publisher_node.cpp)
 
 ament_target_dependencies(profile_publisher_node
@@ -71,35 +69,26 @@ target_link_libraries(profile_publisher_node
   ${PCL_COMMON_LIBRARIES}
   ${Boost_LIBRARIES}
 )
-
-#
-# Executable 2: save_profile_to_pcd
-#
-add_executable(save_profile_to_pcd src/save_profile_to_pcd.cpp)
-
-ament_target_dependencies(save_profile_to_pcd
+add_executable(profile_publisher_intensity src/profile_publisher_intensity.cpp)
+ament_target_dependencies(profile_publisher_intensity
   rclcpp
   sensor_msgs
   std_msgs
 )
 
-target_link_libraries(save_profile_to_pcd
+target_link_libraries(profile_publisher_intensity
   EthernetScanner
   ${PCL_IO_LIBRARIES}
   ${PCL_COMMON_LIBRARIES}
   ${Boost_LIBRARIES}
 )
 
-add_executable(merge_and_save_node src/merge_and_save_node.cpp)
-ament_target_dependencies(merge_and_save_node rclcpp sensor_msgs pcl_conversions)
-target_link_libraries(merge_and_save_node ${PCL_LIBRARIES})
 # Install both targets
 install(TARGETS
   profile_publisher_node
-  save_profile_to_pcd
-  merge_and_save_node
   encoder_test
   encoder_pointcloud
+  profile_publisher_intensity
   DESTINATION lib/${PROJECT_NAME}
 )
 
