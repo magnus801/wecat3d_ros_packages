@@ -37,6 +37,10 @@ int main(int argc, char* argv[]) {
     auto node = rclcpp::Node::make_shared("wecat3d_runtime_node");
     auto pub = node->create_publisher<sensor_msgs::msg::PointCloud2>("/wecat3d/pointcloud", 10);
     pcl::PointCloud<pcl::PointXYZ>::Ptr merged_cloud(new pcl::PointCloud<pcl::PointXYZ>);
+    // FIFO configuration BEFORE connecting (must not use handle!)
+    EthernetScanner_WriteData(0, (char*)"SetLibraryScannerFiFoSize=41984000", strlen("SetLibraryScannerFiFoSize=41984000"));
+    EthernetScanner_WriteData(0, (char*)"SetLibraryScannerFiFoMode=1", strlen("SetLibraryScannerFiFoMode=1"));
+    
     // Connect to sensor
     const char* ip = "192.168.100.1";
     const char* port = "32001";
@@ -59,7 +63,7 @@ int main(int argc, char* argv[]) {
     send_command(handle, "SetAcquisitionStop\r");
     usleep(500000);
     send_command(handle, "SetTriggerSource=2\r");
-    send_command(handle, "SetTriggerEncoderStep=3\r");
+    send_command(handle, "SetTriggerEncoderStep=2\r");
     send_command(handle, "SetEncoderTriggerFunction=2\r");
     send_command(handle, "ResetEncoder\r");
     send_command(handle, "SetRangeImageNrProfiles=1\r");
@@ -71,19 +75,20 @@ int main(int argc, char* argv[]) {
     send_command(handle, "SetROI1StepX=0\r");
     send_command(handle, "SetROI1StepZ=0\r");
     // Auto exposure settings
-    send_command(handle, "SetAutoExposureMode=0\r");
+    // send_command(handle, "SetAutoExposureMode=0\r");
     // send_command(handle, "SetHDR=1\r");
     // send_command(handle, "SetExposureTime=750\r");
-    // send_command(handle, "SetExposureTime2=1000\r");
+    // send_command(handle, "SetExposureTime2=10000\r");
     
-    // send_command(handle, "SetAutoExposureMode=1\r");
-    // send_command(handle, "SetAutoExposureTimeMin=750\r");
-    // send_command(handle, "SetAutoExposureTimeMax=20000\r");
-    // send_command(handle, "SetAutoExposureIntensityRangeMin=0\r");
-    // send_command(handle, "SetAutoExposureIntensityRangeMax=1024\r");
-    // send_command(handle, "SetAutoExposureRangeXMin=0\r");
-    // send_command(handle, "SetAutoExposureRangeXMax=1278\r");
+    send_command(handle, "SetAutoExposureMode=1\r");
+    send_command(handle, "SetAutoExposureTimeMin=750\r");
+    send_command(handle, "SetAutoExposureTimeMax=10000\r");
+    send_command(handle, "SetAutoExposureIntensityRangeMin=0\r");
+    send_command(handle, "SetAutoExposureIntensityRangeMax=1024\r");
+    send_command(handle, "SetAutoExposureRangeXMin=0\r");
+    send_command(handle, "SetAutoExposureRangeXMax=1278\r");
     // Enable Z and intensity output
+    send_command(handle, "SetSignalSelection=1\r"); 
     send_command(handle, "SetSignalContentZ=1\r");
     send_command(handle, "SetSignalContentStrength=1\r");
     // Enable internal 3D point calculation
@@ -96,12 +101,17 @@ int main(int argc, char* argv[]) {
     float total_y_distance = 0.0f;
     RCLCPP_INFO(node->get_logger(), "Acquisition started. Waiting for profiles...");
     while (keep_running && rclcpp::ok()) {
+
+        int fifo_fill = EthernetScanner_GetDllFiFoState(handle);
+        if (fifo_fill >= 90) {
+            RCLCPP_WARN(node->get_logger(), "⚠️ DLL FIFO nearly full (%d%%) — system might be falling behind!", fifo_fill);
+        }
         double xBuf[BUFFER_SIZE], zBuf[BUFFER_SIZE];
         int iBuf[BUFFER_SIZE], wBuf[BUFFER_SIZE];
         unsigned int rawEnc;
         unsigned char usrIO;
         int picCount;
-        int n = EthernetScanner_GetXZIExtended(handle, xBuf, zBuf, iBuf, wBuf, BUFFER_SIZE, &rawEnc, &usrIO, 1000, nullptr, 0, &picCount);
+        int n = EthernetScanner_GetXZIExtended(handle, xBuf, zBuf, iBuf, wBuf, BUFFER_SIZE, &rawEnc, &usrIO, 4000, nullptr, 0, &picCount);
         if (n == WIDTH_X) {
             int32_t raw = static_cast<int32_t>(rawEnc);
             if (!initialized) {
@@ -110,6 +120,8 @@ int main(int argc, char* argv[]) {
             }
             int32_t rel_enc = raw - base_enc;
             float y = rel_enc / 1000.0f;  // mm to meters
+            // constexpr float mm_per_count = 320.0f / 1026.0f;  // Replace 100.0f with your actual travel per rev
+            // float y = rel_enc * mm_per_count / 1000.0f;
             total_y_distance = y;
             sensor_msgs::msg::PointCloud2 msg;
             msg.header.stamp = node->now();
@@ -130,6 +142,7 @@ int main(int argc, char* argv[]) {
             cur_cloud->is_dense = false;
             cur_cloud->points.resize(n);
             for (int i = 0; i < n; ++i, ++it_x, ++it_y, ++it_z) {
+                if (iBuf[i] < 25) continue;  // Skip low-intensity (dark/uncertain) points
                 float x = static_cast<float>(xBuf[i] / 1000.0f);
                 float z = static_cast<float>(zBuf[i] / 1000.0f);
                 *it_x = x;
@@ -142,7 +155,7 @@ int main(int argc, char* argv[]) {
             *merged_cloud += *cur_cloud;
             pcl::io::savePCDFileBinaryCompressed("merged_encoder_output.pcd", *merged_cloud);
             pub->publish(msg);
-            RCLCPP_INFO(node->get_logger(), "Published %d points | Encoder raw=%d | Y=%.3f m | Total Y=%.3f m", n, raw, y, total_y_distance);
+            RCLCPP_INFO(node->get_logger(), "Published %d points | real encoder=%d | Encoder raw=%d | Y=%.3f m | Total Y=%.3f m", n, rel_enc, raw, y, total_y_distance);
         }
         rclcpp::spin_some(node);
         usleep(500);
@@ -153,4 +166,4 @@ int main(int argc, char* argv[]) {
     rclcpp::shutdown();
     std::cout << "Sensor disconnected. Shutdown complete.\n";
     return 0;
-}
+} 
