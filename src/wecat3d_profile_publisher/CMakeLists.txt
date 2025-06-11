@@ -40,6 +40,7 @@ target_link_libraries(encoder_pointcloud
   ${PCL_IO_LIBRARIES}
   ${PCL_COMMON_LIBRARIES}
   ${Boost_LIBRARIES}
+  dl
 )
 add_executable(encoder_test src/encoder_test.cpp)
 ament_target_dependencies(encoder_test
@@ -53,6 +54,7 @@ target_link_libraries(encoder_test
   ${PCL_IO_LIBRARIES}
   ${PCL_COMMON_LIBRARIES}
   ${Boost_LIBRARIES}
+  dl
 )
 
 add_executable(profile_publisher_node src/profile_publisher_node.cpp)
