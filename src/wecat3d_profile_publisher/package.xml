@@ -6,16 +6,16 @@
   <description>TODO: Package description</description>
   <maintainer email="atharvakulkarni381@gmail.com">atharva</maintainer>
   <license>TODO: License declaration</license>
-
   <buildtool_depend>ament_cmake</buildtool_depend>
-
+  
+  <depend>rclpy</depend>
   <depend>rclcpp</depend>
   <depend>sensor_msgs</depend>
   <depend>std_msgs</depend>
-
+  
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>
-
+  
   <export>
     <build_type>ament_cmake</build_type>
   </export>
