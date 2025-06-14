@@ -7,6 +7,7 @@
 #include <exception>
 #include <string>
 #include <chrono>
+#include <memory>
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
 #include <sensor_msgs/point_cloud2_iterator.hpp>
@@ -14,8 +15,6 @@
 #include <pcl/io/pcd_io.h>
 #include <dlfcn.h>
 #include "EthernetScannerSDK.h"
-
-
 
 ///-----DEFINING PARAMETERS-----///
 #define WIDTH_X 1280
@@ -50,7 +49,10 @@ void signal_handler(int signal) {
         stop = true;
     }
 }
+
 ///-----STRUCT CLASSES-----///
+
+//user states are defined for taking encoder value from pins like ea1,ea2
 struct UserIOState {
     int EA1;
     int EA2;
@@ -64,17 +66,6 @@ struct UserIOState {
     
     UserIOState() = default;
 };
-// struct ScannedProfile {
-//     std::vector<float> roiWidthX;
-//     std::vector<float> roiHeightZ;
-//     std::vector<uint8_t> intensity;
-//     std::vector<float> signalWidth;
-//     unsigned int encoderValue;
-//     UserIOState userIOState;
-//     int pictureCounter;
-//     int scannedPoints;
-// };
-
 
 struct ScannedProfile {
     std::vector<float> roiWidthX;
@@ -88,6 +79,8 @@ struct ScannedProfile {
     
     // Default constructor
     ScannedProfile() = default;
+
+    ScannedProfile(int x,int z):roiWidthX(x,0),roiHeightZ(z,0),intensity(1200,0),signalWidth(1200,0){};
     
     // Copy constructor (defaulted - will do deep copy)
     ScannedProfile(const ScannedProfile& other) = default;
@@ -125,7 +118,6 @@ struct ScannedProfile {
     ~ScannedProfile() = default;
 };
 
-
 struct CameraImage {
     std::vector<uint8_t> rawImageData;
     int imgWidth;
@@ -135,8 +127,9 @@ struct CameraImage {
     int imgStepX;
     int imgStepY;
 };
+
 //------CONVERTING INTO CTYPE VARIABLES------//
-// Fixed function pointer declarations to match actual signatures
+// Fixed function pointer declarations to match actual signatures in c language of sdk
 typedef void (*EthernetScanner_GetConnectStatus_ptr)(void*, int*);
 typedef int  (*EthernetScanner_GetXZIExtended_ptr)(void*, double*, double*, int*, int*, int, unsigned int*, unsigned char*, int, unsigned char*, int, int*);
 typedef int  (*EthernetScanner_GetImage_ptr)(void*, char*, int, unsigned int*, unsigned int*, unsigned int*, unsigned int*, unsigned int*, unsigned int*, unsigned int);
@@ -166,17 +159,13 @@ HMODULE libHandle = nullptr;
 #else
 void* libHandle = nullptr;
 #endif
-
-// Function to load the library and assign function pointers
+//----Loading library for windows or linux takes path from list library_paths---//
 bool loadEthernetScannerLibrary() {
 #ifdef _WIN32
     libHandle = LoadLibrary("EthernetScanner.dll");
 #else
-    // Try multiple possible library locations
     const char* library_paths[] = {
         "./libEthernetScanner.so",
-        "/usr/local/lib/libEthernetScanner.so",
-        "/usr/lib/libEthernetScanner.so",
         "libEthernetScanner.so"
     };
     
@@ -200,8 +189,6 @@ bool loadEthernetScannerLibrary() {
 #else
     #define LOAD_SYMBOL(name) (p_##name = (name##_ptr)dlsym(libHandle, #name))
 #endif
-
-    // Load each function with error checking
     if (!LOAD_SYMBOL(EthernetScanner_Connect)) {
         std::cerr << "Failed to load EthernetScanner_Connect: " << dlerror() << std::endl;
         return false;
@@ -243,7 +230,6 @@ bool loadEthernetScannerLibrary() {
         return false;
     }
     
-    std::cout << "All functions loaded successfully!" << std::endl;
     return true;
 }
 
@@ -256,13 +242,14 @@ void unloadEthernetScannerLibrary() {
         dlclose(libHandle);
 #endif
         libHandle = nullptr;
-        std::cout << "Library unloaded successfully" << std::endl;
+
     }
 }
+
 #define SENSOR_CONNECTED 3
 #define SENSOR_DISCONNECTED 0
 
-// Forward declaration of SensorException
+//  declaration of SensorException class
 class SensorException : public std::runtime_error {
 public:
     explicit SensorException(const std::string& message)
@@ -276,43 +263,44 @@ public:
     std::string port;
     void* handle;
     static constexpr size_t read_buf_size = 128 * 1024;
-    char read_buf[read_buf_size];
+    std::unique_ptr<char[]> read_buf;
     int status;
-    // Profile buffers
-    double* roiWidthX;
-    double* roiHeightZ;
-    int* intensity;
-    int* signalWidth;
-    uint32_t* encoderValue;
-    uint32_t* userIOState;
-    int* pictureCounter;
-    // Camera image buffers
-    char* rawBuffer;
+    
+    // Profile buffers - using smart pointers
+    std::unique_ptr<double[]> roiWidthX;
+    std::unique_ptr<double[]> roiHeightZ;
+    std::unique_ptr<int[]> intensity;
+    std::unique_ptr<int[]> signalWidth;
+    std::unique_ptr<uint32_t> encoderValue;
+    std::unique_ptr<uint32_t> userIOState;
+    std::unique_ptr<int> pictureCounter;
+    
+    // Camera image buffers - using smart pointers
+    std::unique_ptr<char[]> rawBuffer;
     size_t rawBufferSize;
-    uint32_t* width;
-    uint32_t* height;
-    uint32_t* offsetX;
-    uint32_t* offsetY;
-    uint32_t* stepX;
-    uint32_t* stepY;
+    std::unique_ptr<uint32_t[]> width;
+    std::unique_ptr<uint32_t[]> height;
+    std::unique_ptr<uint32_t[]> offsetX;
+    std::unique_ptr<uint32_t[]> offsetY;
+    std::unique_ptr<uint32_t[]> stepX;
+    std::unique_ptr<uint32_t[]> stepY;
+
+
+
+    // parameterized constructor 
     Sensor(const std::string& ipAddress, int portNumber)
         : ip(ipAddress), port(std::to_string(portNumber)),
-          handle(nullptr), status(0),
-          roiWidthX(nullptr), roiHeightZ(nullptr), intensity(nullptr), signalWidth(nullptr),
-          encoderValue(nullptr), userIOState(nullptr), pictureCounter(nullptr),
-          rawBuffer(nullptr), rawBufferSize(0),
-          width(nullptr), height(nullptr), offsetX(nullptr),
-          offsetY(nullptr), stepX(nullptr), stepY(nullptr) {
-        // Initialize read buffer to zero
-        memset(read_buf, 0, read_buf_size);
+          handle(nullptr), status(0), rawBufferSize(0) {
+        // Initialize read buffer
+        read_buf = std::make_unique<char[]>(read_buf_size);
+        std::memset(read_buf.get(), 0, read_buf_size);
     }
-    // Destructor (if needed to free allocated memory)
-    ~Sensor() {
-        // If you allocate memory for any of the pointers, free it here
-    }
+    
+    // Destructor automatically handles cleanup with smart pointers
+    ~Sensor() = default;
+    
     void connect(int timeout = 0) {
-        std::cout << "Attempting to connect with the sensor at " << ip << "...\n";
-        
+
         // Check if function pointers are loaded
         if (!p_EthernetScanner_Connect) {
             throw std::runtime_error("EthernetScanner_Connect function not loaded!");
@@ -337,12 +325,11 @@ public:
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
         auto connectionPollingStart = std::chrono::steady_clock::now();
         while (!handle && std::chrono::steady_clock::now() - connectionPollingStart < std::chrono::milliseconds(timeout)) {
-            // Busy wait (could also sleep a bit to avoid CPU burn)
         }
         
-        std::cout << "Checking connection status..." << std::endl;
+
         int connectionStatus = get_connect_status();
-        std::cout << "Connection status: " << connectionStatus << std::endl;
+
         
         if (connectionStatus != SENSOR_CONNECTED) {
             throw std::runtime_error("Failed to connect with the sensor; Connection status: " + std::to_string(connectionStatus));
@@ -350,86 +337,100 @@ public:
         std::cout << "Sensor has been connected successfully. Status: " << connectionStatus << "\n";
         allocate_memory();
     }
+    
     void disconnect() {
         handle = p_EthernetScanner_Disconnect(handle);
         if (handle) {
             throw std::runtime_error("Failed to disconnect the sensor.");
         }
-        std::cout << "Sensor has been disconnected successfully. Status: " << SENSOR_DISCONNECTED << "\n";
         deallocate_memory();
     }
+    
     int get_connect_status() {
         if (!p_EthernetScanner_GetConnectStatus) {
-            std::cerr << "EthernetScanner_GetConnectStatus function not loaded!" << std::endl;
+
             return SENSOR_DISCONNECTED;
         }
         
         if (!handle) {
-            std::cout << "Handle is null, returning SENSOR_DISCONNECTED" << std::endl;
+
             return SENSOR_DISCONNECTED;
         }
         
-        std::cout << "Calling EthernetScanner_GetConnectStatus with handle: " << handle << std::endl;
         p_EthernetScanner_GetConnectStatus(handle, &status);
-        std::cout << "Raw status from GetConnectStatus: " << status << std::endl;
         
         int result = (status & SENSOR_CONNECTED) ? SENSOR_CONNECTED : SENSOR_DISCONNECTED;
-        std::cout << "Processed connection status: " << result << std::endl;
         return result;
     }
+    
     void allocate_memory() {
-        std::cout << "Allocating memory for profile and camera image ...\n";
-        // Profile buffers
-        roiWidthX = new double[SENSOR_BUFFERSIZEMAX]();
-        roiHeightZ = new double[SENSOR_BUFFERSIZEMAX]();
-        intensity = new int[SENSOR_BUFFERSIZEMAX]();
-        signalWidth = new int[SENSOR_BUFFERSIZEMAX]();
-        encoderValue = new uint32_t(0);
-        userIOState = new uint32_t(0);
-        pictureCounter = new int(0);
-        // Camera image buffers
-        rawBuffer = new char[SENSOR_BUFFERSIZEMAX]();
+        
+        // Profile buffers - using make_unique for arrays
+        roiWidthX = std::make_unique<double[]>(SENSOR_BUFFERSIZEMAX);
+        roiHeightZ = std::make_unique<double[]>(SENSOR_BUFFERSIZEMAX);
+        intensity = std::make_unique<int[]>(SENSOR_BUFFERSIZEMAX);
+        signalWidth = std::make_unique<int[]>(SENSOR_BUFFERSIZEMAX);
+        encoderValue = std::make_unique<uint32_t>(0);
+        userIOState = std::make_unique<uint32_t>(0);
+        pictureCounter = std::make_unique<int>(0);
+        
+        // Camera image buffers - using make_unique for arrays
+        rawBuffer = std::make_unique<char[]>(SENSOR_BUFFERSIZEMAX);
         rawBufferSize = SENSOR_BUFFERSIZEMAX;
-        width = new uint32_t[SENSOR_BUFFERSIZEMAX]();
-        height = new uint32_t[SENSOR_BUFFERSIZEMAX]();
-        offsetX = new uint32_t[SENSOR_BUFFERSIZEMAX]();
-        offsetY = new uint32_t[SENSOR_BUFFERSIZEMAX]();
-        stepX = new uint32_t[SENSOR_BUFFERSIZEMAX]();
-        stepY = new uint32_t[SENSOR_BUFFERSIZEMAX]();
-        std::cout << "Memory has been allocated successfully\n";
+        width = std::make_unique<uint32_t[]>(SENSOR_BUFFERSIZEMAX);
+        height = std::make_unique<uint32_t[]>(SENSOR_BUFFERSIZEMAX);
+        offsetX = std::make_unique<uint32_t[]>(SENSOR_BUFFERSIZEMAX);
+        offsetY = std::make_unique<uint32_t[]>(SENSOR_BUFFERSIZEMAX);
+        stepX = std::make_unique<uint32_t[]>(SENSOR_BUFFERSIZEMAX);
+        stepY = std::make_unique<uint32_t[]>(SENSOR_BUFFERSIZEMAX);
+        
+        // Initialize arrays to zero to store values in future
+        std::memset(roiWidthX.get(), 0, SENSOR_BUFFERSIZEMAX * sizeof(double));
+        std::memset(roiHeightZ.get(), 0, SENSOR_BUFFERSIZEMAX * sizeof(double));
+        std::memset(intensity.get(), 0, SENSOR_BUFFERSIZEMAX * sizeof(int));
+        std::memset(signalWidth.get(), 0, SENSOR_BUFFERSIZEMAX * sizeof(int));
+        std::memset(rawBuffer.get(), 0, SENSOR_BUFFERSIZEMAX);
+        std::memset(width.get(), 0, SENSOR_BUFFERSIZEMAX * sizeof(uint32_t));
+        std::memset(height.get(), 0, SENSOR_BUFFERSIZEMAX * sizeof(uint32_t));
+        std::memset(offsetX.get(), 0, SENSOR_BUFFERSIZEMAX * sizeof(uint32_t));
+        std::memset(offsetY.get(), 0, SENSOR_BUFFERSIZEMAX * sizeof(uint32_t));
+        std::memset(stepX.get(), 0, SENSOR_BUFFERSIZEMAX * sizeof(uint32_t));
+        std::memset(stepY.get(), 0, SENSOR_BUFFERSIZEMAX * sizeof(uint32_t));
+        
     }
+    
     void deallocate_memory() {
-        // Profile buffers
-        delete[] roiWidthX;
-        delete[] roiHeightZ;
-        delete[] intensity;
-        delete[] signalWidth;
-        delete encoderValue;
-        delete userIOState;
-        delete pictureCounter;
-        // Camera image buffers
-        delete[] rawBuffer;
-        delete[] width;
-        delete[] height;
-        delete[] offsetX;
-        delete[] offsetY;
-        delete[] stepX;
-        delete[] stepY;
+        // Smart pointers automatically handle deallocation
+        roiWidthX.reset();
+        roiHeightZ.reset();
+        intensity.reset();
+        signalWidth.reset();
+        encoderValue.reset();
+        userIOState.reset();
+        pictureCounter.reset();
+        rawBuffer.reset();
+        width.reset();
+        height.reset();
+        offsetX.reset();
+        offsetY.reset();
+        stepX.reset();
+        stepY.reset();
         rawBufferSize = 0;
     }
+    
     CameraImage get_camera_image(int timeout = 3000) {
         std::cout << "Reading camera image ...\n";
 
         int response = p_EthernetScanner_GetImage(
             handle,
-            rawBuffer,
+            rawBuffer.get(),
             rawBufferSize,
-            width,
-            height,
-            offsetX,
-            offsetY,
-            stepX,
-            stepY,
+            width.get(),
+            height.get(),
+            offsetX.get(),
+            offsetY.get(),
+            stepX.get(),
+            stepY.get(),
             static_cast<uint32_t>(timeout)
         );
 
@@ -441,11 +442,11 @@ public:
 
         uint32_t imgResolution = width[0] * height[0];
 
-        // Copy rawBuffer to a vector or custom structure
-        std::vector<uint8_t> imgData(rawBuffer, rawBuffer + imgResolution);
+        // Copy rawBuffer to a vector
+        std::vector<uint8_t> imgData(rawBuffer.get(), rawBuffer.get() + imgResolution);
 
         CameraImage img;
-        img.rawImageData = imgData;
+        img.rawImageData = std::move(imgData);
         img.imgWidth = width[0];
         img.imgHeight = height[0];
         img.imgOffsetX = offsetX[0];
@@ -455,69 +456,8 @@ public:
 
         return img;
     }
-    // ScannedProfile get_scanned_profile(int timeout = 1000) {
-    //     std::cout << "Reading scanned profile ...\n";
-
-    //     // Deprecated parameters passed as NULL
-    //     unsigned char* ucBufferRaw = nullptr;
-    //     int iBufferRaw = 0;
-
-    //     int response = p_EthernetScanner_GetXZIExtended(
-    //         handle,
-    //         roiWidthX,
-    //         roiHeightZ,
-    //         intensity,
-    //         signalWidth,
-    //         rawBufferSize,
-    //         encoderValue,
-    //         (unsigned char*)userIOState,
-    //         timeout,
-    //         ucBufferRaw,
-    //         iBufferRaw,
-    //         pictureCounter
-    //     );
-
-    //     if (response < 0) {
-    //         throw SensorException("Failed to get scanned profile. Error code: " + std::to_string(response));
-    //     }
-
-    //     std::cout << "Profile received successfully for " << response << " points\n";
-
-    //     UserIOState userIOStateStruct(
-    //         (userIOState[0] & 0b1),
-    //         (userIOState[0] & 0b10) >> 1,
-    //         (userIOState[0] & 0b100) >> 2,
-    //         (userIOState[0] & 0b1000) >> 3,
-    //         (userIOState[0] & 0b10000) >> 4,
-    //         (userIOState[0] & 0b100000) >> 5,
-    //         (userIOState[0] & 0b1000000) >> 6
-    //     );
-
-    //     // Convert double vectors to float vectors for ScannedProfile struct
-    //     std::vector<float> roiWidthXVec(response);
-    //     std::vector<float> roiHeightZVec(response);
-    //     std::vector<uint8_t> intensityVec(response);
-    //     std::vector<float> signalWidthVec(response);
-
-    //     for (int i = 0; i < response; ++i) {
-    //         roiWidthXVec[i] = static_cast<float>(roiWidthX[i]);
-    //         roiHeightZVec[i] = static_cast<float>(roiHeightZ[i]);
-    //         intensityVec[i] = static_cast<uint8_t>(intensity[i]);
-    //         signalWidthVec[i] = static_cast<float>(signalWidth[i]);
-    //     }
-
-    //     return ScannedProfile{
-    //         roiWidthXVec,
-    //         roiHeightZVec,
-    //         intensityVec,
-    //         signalWidthVec,
-    //         encoderValue[0],
-    //         userIOStateStruct,
-    //         pictureCounter[0],
-    //         response
-    //     };
-    ScannedProfile get_scanned_profile(int timeout = 1000) {
-    std::cout << "Reading scanned profile ...\n";
+    
+    void get_scanned_profile(ScannedProfile& profile,int timeout = 1000) {
 
         // Deprecated parameters passed as NULL
         unsigned char* ucBufferRaw = nullptr;
@@ -525,70 +465,55 @@ public:
 
         int response = p_EthernetScanner_GetXZIExtended(
             handle,
-            roiWidthX,
-            roiHeightZ,
-            intensity,
-            signalWidth,
+            roiWidthX.get(),
+            roiHeightZ.get(),
+            intensity.get(),
+            signalWidth.get(),
             rawBufferSize,
-            encoderValue,
-            (unsigned char*)userIOState,
+            encoderValue.get(),
+            (unsigned char*)userIOState.get(),
             timeout,
             ucBufferRaw,
             iBufferRaw,                                     
-            pictureCounter
+            pictureCounter.get()
         );
 
         if (response < 0) {
             throw SensorException("Failed to get scanned profile. Error code: " + std::to_string(response));
         }
 
-        std::cout << "Profile received successfully for " << response << " points\n";
+        // std::cout << "Profile received successfully for " << response << " points\n";
 
-        UserIOState userIOStateStruct(
-            (userIOState[0] & 0b1),
-            (userIOState[0] & 0b10) >> 1,
-            (userIOState[0] & 0b100) >> 2,
-            (userIOState[0] & 0b1000) >> 3,
-            (userIOState[0] & 0b10000) >> 4,
-            (userIOState[0] & 0b100000) >> 5,
-            (userIOState[0] & 0b1000000) >> 6
-        );
-
-        // Direct construction - no temporary vectors
-        ScannedProfile profile;
         
-        // Reserve exact space to avoid reallocations
-        profile.roiWidthX.reserve(response);
-        profile.roiHeightZ.reserve(response);
-        profile.intensity.reserve(response);
-        profile.signalWidth.reserve(response);
+        profile.encoderValue   = *encoderValue;
+        profile.userIOState    = UserIOState( ((*userIOState) & 0b1),
+                                          ((*userIOState) & 0b10) >> 1,
+                                          ((*userIOState) & 0b100) >> 2,
+                                          ((*userIOState) & 0b1000) >> 3,
+                                          ((*userIOState) & 0b10000) >> 4,
+                                          ((*userIOState) & 0b100000) >> 5,
+                                          ((*userIOState) & 0b1000000) >> 6 );       
 
-        // Direct emplace construction - most efficient
         for (int i = 0; i < response; ++i) {
-            profile.roiWidthX.emplace_back(static_cast<float>(roiWidthX[i]));
-            profile.roiHeightZ.emplace_back(static_cast<float>(roiHeightZ[i]));
-            profile.intensity.emplace_back(static_cast<uint8_t>(intensity[i]));
-            profile.signalWidth.emplace_back(static_cast<float>(signalWidth[i]));
+            profile.roiWidthX[i]=roiWidthX[i];
+            profile.roiHeightZ[i]=roiHeightZ[i];
         }
 
-        // Set scalar values
-        profile.encoderValue = encoderValue[0];
-        profile.userIOState = std::move(userIOStateStruct);
-        profile.pictureCounter = pictureCounter[0];
-        profile.scannedPoints = response;
-
-        return profile; // RVO/NRVO will optimize this
+        profile.pictureCounter = *pictureCounter;
+        profile.scannedPoints  = response;
     }
 
     std::string get_dll_version() {
-        int response = p_EthernetScanner_GetVersion(reinterpret_cast<unsigned char*>(read_buf), read_buf_size);
+        int response = p_EthernetScanner_GetVersion(reinterpret_cast<unsigned char*>(read_buf.get()), read_buf_size);
 
         if (response < 0) {
             throw SensorException("Failed to get DLL version. Error code: " + std::to_string(response));
         }
 
-        return std::string(read_buf);
+        return std::string(read_buf.get());
     }
+    //function to read data
+    
     std::string read_data(const std::string& command, int cacheTime = 0) {
         std::vector<char> cmdBuffer(command.begin(), command.end());
         cmdBuffer.push_back('\0');  
@@ -596,19 +521,20 @@ public:
         int response = p_EthernetScanner_ReadData(
             handle,
             cmdBuffer.data(),
-            read_buf,
+            read_buf.get(),
             read_buf_size,
             cacheTime
         );
 
         if (response == SENSOR_READDATAOK) {
-            std::cout << "Sent Read Data command " << command << " -> Response: " << read_buf << " (Sensor_READDATAOK)\n";
+            std::cout << "Sent Read Data command " << command << " -> Response: " << read_buf.get() << " (Sensor_READDATAOK)\n";
         } else {
             throw SensorException("Failed to read data. Error code: " + std::to_string(response));
         }
 
-        return std::string(read_buf);
+        return std::string(read_buf.get());
     }
+    ///function used to write data sends sdk commands as string msg
 
     int write_data(const std::string& command) {
         std::vector<char> cmdBuffer(command.begin(), command.end());
@@ -635,134 +561,160 @@ public:
 };
 
 int main(int argc, char* argv[]) {
-    std::cout << "Starting encoder test program..." << std::endl;
     rclcpp::init(argc, argv);
     signal(SIGINT, signal_handler);
     auto node = rclcpp::Node::make_shared("wecat3d_runtime_node");
     auto pub = node->create_publisher<sensor_msgs::msg::PointCloud2>("/wecat3d/pointcloud", 10);
-    pcl::PointCloud<pcl::PointXYZ>::Ptr merged_cloud(new pcl::PointCloud<pcl::PointXYZ>);
-
-    if (!loadEthernetScannerLibrary()) {
-        std::cerr << "Failed to load EthernetScanner library!" << std::endl;
+    
+    // File streaming setup
+    std::ofstream pcd_file("merged_encoder_output.pcd", std::ios::out | std::ios::trunc);
+    if (!pcd_file.is_open()) {
+        std::cerr << "Failed to open PCD file for writing!" << std::endl;
         return 1;
     }
-
+    
+    // Write PCD header placeholder (update WIDTH and POINTS later after profile taken)
+    std::streampos header_start = pcd_file.tellp();
+    pcd_file << "# .PCD v0.7 - Point Cloud Data file\n";
+    pcd_file << "VERSION 0.7\n";
+    pcd_file << "FIELDS x y z\n";
+    pcd_file << "SIZE 4 4 4\n";
+    pcd_file << "TYPE F F F\n";
+    pcd_file << "COUNT 1 1 1\n";
+    pcd_file << "WIDTH 0000000000\n";  // Placeholder for point count (10 digits)
+    pcd_file << "HEIGHT 1\n";
+    pcd_file << "VIEWPOINT 0 0 0 1 0 0 0\n";
+    pcd_file << "POINTS 0000000000\n";  // Placeholder for point count (10 digits)
+    pcd_file << "DATA ascii\n";
+    std::streampos data_start = pcd_file.tellp();
+    
+    uint64_t total_points = 0;
+    
+    if (!loadEthernetScannerLibrary()) {
+        std::cerr << "Failed to load EthernetScanner library!" << std::endl;
+        pcd_file.close();
+        return 1;
+    }
+    
     try {
-        std::cout << "Creating sensor object..." << std::endl;
         Sensor sensor("192.168.100.1", 32001);  
         
-        std::cout << "Attempting to connect to sensor..." << std::endl;
         sensor.connect(0); 
         sensor.write_data("SetHeartbeat=1000");
         sensor.write_data("SetExposureTime=750");
-
         sensor.write_data("SetTriggerSource=2");
         sensor.write_data("SetTriggerEncoderStep=20");
         sensor.write_data("SetEncoderTriggerFunction=2");
         sensor.write_data("ResetEncoder");
         sensor.write_data("SetRangeImageNrProfiles=1");
         sensor.write_data("SetAcquisitionStart");
-
+        //single scan variable initialized with encoder//
         int scanNo = 0;
         int64_t last_encoder = std::numeric_limits<int64_t>::min();
-
-        std::vector<std::vector<float>> all_points;
-
-        std::cout << "Sensor is running with encoder triggering. Press Ctrl+C to stop." << std::endl;
-
+        //setting up ros and PointCloud2 message
+        sensor_msgs::msg::PointCloud2 msg;
+        sensor_msgs::PointCloud2Modifier mod(msg);
+        mod.setPointCloud2FieldsByString(1, "xyz");
+        msg.header.frame_id = "map";
+        msg.height = 1;
+        msg.is_dense = false;
+        msg.is_bigendian = false;
+        
+        const float scale_factor = 1.0f / 1000.0f;  
         std::signal(SIGINT, signal_handler);
-        //ScannedProfile scan;
-
-    while (!stop) {
-        try {
-            //this is copy assignment operator , if you use move assignment operator this memory can be saved
-            ScannedProfile scan = sensor.get_scanned_profile(1000); 
-            scanNo++;
-            
-            const std::vector<float>& x_values = scan.roiWidthX;
-            const std::vector<float>& z_values = scan.roiHeightZ;
-            uint32_t encoder_unsigned = scan.encoderValue;
-
-            int64_t encoder = static_cast<int64_t>(encoder_unsigned);
-            if (encoder_unsigned >= static_cast<uint32_t>(1ULL << 31)) {
-                encoder -= static_cast<int64_t>(1ULL << 32);
-            }
-
-            if (last_encoder != std::numeric_limits<int64_t>::min()) {
-                int64_t delta_encoder = encoder - last_encoder;
-                double delta_microns = delta_encoder * (ENC_SCALE_MM * 1000.0);
-                std::cout << "[" << scanNo << "] Encoder: " << encoder
-                        << ", ΔEncoder: " << delta_encoder
-                        << ", ΔDistance: " << delta_microns << " µm" << std::endl;
-            }
-            
-            if (last_encoder == std::numeric_limits<int64_t>::min() || encoder != last_encoder) {
+        ScannedProfile scan(1280,1024);
+        //main loop which acquires sensor data and publishes point clouds
+        while (!stop) {
+            try {
+                sensor.get_scanned_profile(scan,1000); 
+                scanNo++;
                 
-                double y_value = encoder * ENC_SCALE_MM;  
-                
-                // pcl::PointCloud<pcl::PointXYZ>::Ptr cur_cloud(new pcl::PointCloud<pcl::PointXYZ>());
+                const std::vector<float>& x_values = scan.roiWidthX;
+                const std::vector<float>& z_values = scan.roiHeightZ;
+                uint32_t encoder_unsigned = scan.encoderValue;
 
-                // cur_cloud->width = x_values.size();
-                // cur_cloud->height = 1;
-                // cur_cloud->is_dense = false;
-                // cur_cloud->points.resize(x_values.size());
-                auto cur_cloud = std::make_shared<pcl::PointCloud<pcl::PointXYZ>>(x_values.size(), 1);
-                cur_cloud->is_dense = false;
-
-                for (size_t i = 0; i < x_values.size(); ++i) {
-                    cur_cloud->points[i].x = x_values[i];     
-                    cur_cloud->points[i].y = y_value;         
-                    cur_cloud->points[i].z = z_values[i];     
+                ///first encoder is declared as unsined int, logic to convert unsigned 32-bit encoder to signed 64-bit
+                int64_t encoder = static_cast<int64_t>(encoder_unsigned);
+                if (encoder_unsigned >= static_cast<uint32_t>(1ULL << 31)) {
+                    encoder -= static_cast<int64_t>(1ULL << 32);
+                }
+                // Calculate encoder movement
+                if (last_encoder != std::numeric_limits<int64_t>::min()) {
+                    int64_t delta_encoder = encoder - last_encoder;
+                    double delta_microns = delta_encoder * (ENC_SCALE_MM * 1000.0);
                 }
                 
-                *merged_cloud += *cur_cloud;
-                
-                if (scanNo % 500 == 0) { 
-                    pcl::io::savePCDFileBinaryCompressed("merged_encoder_output.pcd", *merged_cloud);
-                    std::cout << "Saved PCD with " << merged_cloud->points.size() << " points" << std::endl;
+                if (last_encoder == std::numeric_limits<int64_t>::min() || encoder != last_encoder) {
+                    double y_value = encoder * ENC_SCALE_MM;
+                    
+                    // Write points directly to file
+                    for (size_t i = 0; i < x_values.size(); ++i) {
+                        // Write in ASCII format: x y z
+                        pcd_file << std::fixed << std::setprecision(6) 
+                                << x_values[i] << " " 
+                                << y_value << " " 
+                                << z_values[i] << "\n";
+                    }
+                    pcd_file.flush(); // Ensure data is written immediately
+                    total_points += x_values.size();
+                    
+                    // Resize ROS message if point count is changed
+                    msg.header.stamp = node->now();
+                    if (msg.width != x_values.size()) {
+                        msg.width = x_values.size();
+                        mod.resize(x_values.size());
+                    }
+                    //publishing single line data into ros2 topic
+                    sensor_msgs::PointCloud2Iterator<float> it_x(msg, "x");
+                    sensor_msgs::PointCloud2Iterator<float> it_y(msg, "y");
+                    sensor_msgs::PointCloud2Iterator<float> it_z(msg, "z");     
+                    float y_scaled = y_value * scale_factor;
+                    //writing into pointlcoud 
+                    for (size_t i = 0; i < x_values.size(); ++i, ++it_x, ++it_y, ++it_z) {
+                        *it_x = x_values[i] * scale_factor;      
+                        *it_y = y_scaled;                        
+                        *it_z = z_values[i] * scale_factor;     
+                    }
+                    
+                    pub->publish(msg);
+                    
+                    if (scanNo % 500 == 0) { 
+                        std::cout << "Processed " << scanNo << " scans, total points: " << total_points << std::endl;
+                    }
                 }
                 
-                sensor_msgs::msg::PointCloud2 msg;
-                msg.header.stamp = node->now();
-                msg.header.frame_id = "map";
-                msg.height = 1;
-                msg.width = x_values.size();
-                msg.is_dense = false;
-                msg.is_bigendian = false;
+                last_encoder = encoder;
                 
-                sensor_msgs::PointCloud2Modifier mod(msg);
-                mod.setPointCloud2FieldsByString(1, "xyz");
-                mod.resize(x_values.size());
-                
-                sensor_msgs::PointCloud2Iterator<float> it_x(msg, "x");
-                sensor_msgs::PointCloud2Iterator<float> it_y(msg, "y");
-                sensor_msgs::PointCloud2Iterator<float> it_z(msg, "z");
-                
-                for (size_t i = 0; i < x_values.size(); ++i, ++it_x, ++it_y, ++it_z) {
-                    *it_x = x_values[i] / 1000.0f;      
-                    *it_y = y_value / 1000.0f;          
-                    *it_z = z_values[i] / 1000.0f;     
+            } catch (const SensorException& e) {
+                // Continue on timeout errors (-1) which was for no new profile recieved
+                if (std::string(e.what()).find("-1") != std::string::npos) {
+                    continue;
+                } else {
+                    throw;
                 }
-                
-                pub->publish(msg);
-                
-                RCLCPP_INFO(node->get_logger(), 
-                        "Published %zu points | Encoder: %ld | Y=%.3f mm", 
-                        x_values.size(), encoder, y_value);
-            }
-            
-            last_encoder = encoder;
-            
-        } catch (const SensorException& e) {
-            if (std::string(e.what()).find("-1") != std::string::npos) {
-                continue;
-            } else {
-                throw;
             }
         }
-    }
-pcl::io::savePCDFileBinaryCompressed("final_merged_encoder_output.pcd", *merged_cloud);
-std::cout << "Final PCD saved with " << merged_cloud->points.size() << " total points" << std::endl;
+        
+        // Update header with final point count
+        std::streampos current_pos = pcd_file.tellp();
+        
+        // Update WIDTH field
+        pcd_file.seekp(header_start);
+        pcd_file << "# .PCD v0.7 - Point Cloud Data file\n";
+        pcd_file << "VERSION 0.7\n";
+        pcd_file << "FIELDS x y z\n";
+        pcd_file << "SIZE 4 4 4\n";
+        pcd_file << "TYPE F F F\n";
+        pcd_file << "COUNT 1 1 1\n";
+        pcd_file << "WIDTH " << std::setw(10) << std::setfill('0') << total_points << "\n";
+        pcd_file << "HEIGHT 1\n";
+        pcd_file << "VIEWPOINT 0 0 0 1 0 0 0\n";
+        pcd_file << "POINTS " << std::setw(10) << std::setfill('0') << total_points << "\n";
+        pcd_file << "DATA ascii\n";
+        
+        pcd_file.close();
+        std::cout << "Final PCD saved with " << total_points << " points" << std::endl;
+        
         std::cout << "Getting connection status..." << std::endl;
         int status = sensor.get_connect_status();
         if (status == SENSOR_CONNECTED) {
@@ -770,21 +722,19 @@ std::cout << "Final PCD saved with " << merged_cloud->points.size() << " total p
         } else {
             std::cout << "Sensor is NOT connected after attempt." << std::endl;
         }
-        
-        std::cout << "Disconnecting sensor..." << std::endl;
+        //shutdown and reset for sensor and ros
         sensor.write_data("SetAcquisitionStop");
         sensor.write_data("SetResetSettings");
         sensor.disconnect();
         rclcpp::shutdown();
-        std::cout << "Sensor disconnected. Shutdown complete.\n";
-    }
-    catch (const std::exception& e) {
+        
+    } catch (const std::exception& e) {
         std::cerr << "Exception occurred: " << e.what() << std::endl;
+        pcd_file.close();
         unloadEthernetScannerLibrary();
         return 1;
     }
+    
     unloadEthernetScannerLibrary();
     return 0;
-    
-
 }
