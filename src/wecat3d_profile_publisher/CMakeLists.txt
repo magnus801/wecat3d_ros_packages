@@ -29,33 +29,33 @@ link_directories(
 
 add_definitions(${PCL_DEFINITIONS})
 
-add_executable(encoder_pointcloud src/encoder_pointcloud.cpp)
-ament_target_dependencies(encoder_pointcloud
-  rclcpp
-  sensor_msgs
-  std_msgs
-)
-target_link_libraries(encoder_pointcloud
-  EthernetScanner
-  ${PCL_IO_LIBRARIES}
-  ${PCL_COMMON_LIBRARIES}
-  ${Boost_LIBRARIES}
-  dl
-)
-add_executable(encoder_test src/encoder_test.cpp)
-ament_target_dependencies(encoder_test
-  rclcpp
-  sensor_msgs
-  std_msgs
-)
+# add_executable(encoder_pointcloud src/encoder_pointcloud.cpp)
+# ament_target_dependencies(encoder_pointcloud
+#   rclcpp
+#   sensor_msgs
+#   std_msgs
+# )
+# target_link_libraries(encoder_pointcloud
+#   EthernetScanner
+#   ${PCL_IO_LIBRARIES}
+#   ${PCL_COMMON_LIBRARIES}
+#   ${Boost_LIBRARIES}
+#   dl
+# )
+# add_executable(encoder_test src/encoder_test.cpp)
+# ament_target_dependencies(encoder_test
+#   rclcpp
+#   sensor_msgs
+#   std_msgs
+# )
 
-target_link_libraries(encoder_test
-  EthernetScanner
-  ${PCL_IO_LIBRARIES}
-  ${PCL_COMMON_LIBRARIES}
-  ${Boost_LIBRARIES}
-  dl
-)
+# target_link_libraries(encoder_test
+#   EthernetScanner
+#   ${PCL_IO_LIBRARIES}
+#   ${PCL_COMMON_LIBRARIES}
+#   ${Boost_LIBRARIES}
+#   dl
+# )
 
 add_executable(profile_publisher_node src/profile_publisher_node.cpp)
 
@@ -71,14 +71,14 @@ target_link_libraries(profile_publisher_node
   ${PCL_COMMON_LIBRARIES}
   ${Boost_LIBRARIES}
 )
-add_executable(profile_publisher_intensity src/profile_publisher_intensity.cpp)
-ament_target_dependencies(profile_publisher_intensity
+add_executable(profile_generator src/profile_generator.cpp)
+ament_target_dependencies(profile_generator
   rclcpp
   sensor_msgs
   std_msgs
 )
 
-target_link_libraries(profile_publisher_intensity
+target_link_libraries(profile_generator
   EthernetScanner
   ${PCL_IO_LIBRARIES}
   ${PCL_COMMON_LIBRARIES}
@@ -88,9 +88,7 @@ target_link_libraries(profile_publisher_intensity
 # Install both targets
 install(TARGETS
   profile_publisher_node
-  encoder_test
-  encoder_pointcloud
-  profile_publisher_intensity
+  profile_generator
   DESTINATION lib/${PROJECT_NAME}
 )
 
