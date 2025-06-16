@@ -16,6 +16,7 @@ find_package(pcl_conversions REQUIRED)
 
 # Include and library paths
 include_directories(
+  include
   ${PCL_INCLUDE_DIRS}
   ${Boost_INCLUDE_DIRS}
   /usr/include/eigen3
