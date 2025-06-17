@@ -1,97 +1,94 @@
 cmake_minimum_required(VERSION 3.8)
 project(wecat3d_profile_publisher)
 
+# Modern CMake: Use target-based dependencies instead of global variables
 if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
   add_compile_options(-Wall -Wextra -Wpedantic)
 endif()
 
-# Dependencies
+# ======== Dependencies ========
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
-find_package(PCL REQUIRED COMPONENTS io common)
+find_package(PCL REQUIRED COMPONENTS common io)  # Modern PCL uses targets
 find_package(Boost REQUIRED COMPONENTS system filesystem iostreams thread date_time)
 find_package(pcl_conversions REQUIRED)
+find_package(wecat3d_sdk REQUIRED)  # Critical missing dependency!
 
-# Include and library paths
-include_directories(
-  include
-  ${PCL_INCLUDE_DIRS}
-  ${Boost_INCLUDE_DIRS}
-  /usr/include/eigen3
-  ${CMAKE_CURRENT_SOURCE_DIR}/../wecat3d_sdk/include
+# ======== Target Setup ========
+add_library(profile_generator_lib
+  src/profile_generator.cpp
 )
 
-link_directories(
-  ${PCL_LIBRARY_DIRS}
-  ${CMAKE_CURRENT_SOURCE_DIR}/../wecat3d_sdk/lib
+# Modern target-based approach
+target_include_directories(profile_generator_lib
+  PUBLIC 
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:include>
 )
 
-add_definitions(${PCL_DEFINITIONS})
+target_compile_definitions(profile_generator_lib
+  PRIVATE ${PCL_DEFINITIONS}
+)
 
-# add_executable(encoder_pointcloud src/encoder_pointcloud.cpp)
-# ament_target_dependencies(encoder_pointcloud
-#   rclcpp
-#   sensor_msgs
-#   std_msgs
-# )
-# target_link_libraries(encoder_pointcloud
-#   EthernetScanner
-#   ${PCL_IO_LIBRARIES}
-#   ${PCL_COMMON_LIBRARIES}
-#   ${Boost_LIBRARIES}
-#   dl
-# )
-# add_executable(encoder_test src/encoder_test.cpp)
-# ament_target_dependencies(encoder_test
-#   rclcpp
-#   sensor_msgs
-#   std_msgs
-# )
+# Use modern ament_target_dependencies
+ament_target_dependencies(profile_generator_lib
+  rclcpp
+  sensor_msgs
+  std_msgs
+  pcl_conversions
+  PCL
+  Boost
+  wecat3d_sdk  # Link SDK via target
+)
 
-# target_link_libraries(encoder_test
-#   EthernetScanner
-#   ${PCL_IO_LIBRARIES}
-#   ${PCL_COMMON_LIBRARIES}
-#   ${Boost_LIBRARIES}
-#   dl
+# # Link dependencies using CMake targets
+# target_link_libraries(profile_generator_lib
+#   PRIVATE
+#     wecat3d_sdk::EthernetScanner  # Use exported target from SDK
+#     pcl_conversions::pcl_conversions
+#     Boost::boost
+#     ${PCL_LIBRARIES}
 # )
 
+# ======== Executables ========
 add_executable(profile_publisher_node src/profile_publisher_node.cpp)
+target_link_libraries(profile_publisher_node profile_generator_lib)
+ament_target_dependencies(profile_publisher_node rclcpp)
 
-ament_target_dependencies(profile_publisher_node
-  rclcpp
-  sensor_msgs
-  std_msgs
-)
-
-target_link_libraries(profile_publisher_node
-  EthernetScanner
-  ${PCL_IO_LIBRARIES}
-  ${PCL_COMMON_LIBRARIES}
-  ${Boost_LIBRARIES}
-)
 add_executable(profile_generator src/profile_generator.cpp)
-ament_target_dependencies(profile_generator
-  rclcpp
-  sensor_msgs
-  std_msgs
-)
+target_link_libraries(profile_generator profile_generator_lib)
+ament_target_dependencies(profile_generator rclcpp)
 
-target_link_libraries(profile_generator
-  EthernetScanner
-  ${PCL_IO_LIBRARIES}
-  ${PCL_COMMON_LIBRARIES}
-  ${Boost_LIBRARIES}
-)
-
-# Install both targets
-install(TARGETS
+# ======== Installation ========
+install(TARGETS 
   profile_publisher_node
   profile_generator
   DESTINATION lib/${PROJECT_NAME}
 )
 
-ament_package()
+install(TARGETS profile_generator_lib
+  EXPORT export_${PROJECT_NAME}
+  ARCHIVE DESTINATION lib
+  LIBRARY DESTINATION lib
+  RUNTIME DESTINATION bin
+  INCLUDES DESTINATION include
+)
 
+install(DIRECTORY include/ DESTINATION include)
+
+# ======== Exports ========
+ament_export_targets(export_${PROJECT_NAME} HAS_LIBRARY_TARGET)
+ament_export_dependencies(
+  ament_cmake
+  rclcpp
+  sensor_msgs
+  std_msgs
+  PCL
+  Boost
+  pcl_conversions
+  wecat3d_sdk  # Export SDK as dependency
+)
+ament_export_include_directories(include)
+ament_package()

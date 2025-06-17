@@ -1,4 +1,4 @@
-#include "EthernetScannerDriver.hpp"
+#include "wecat3d_profile_publisher/EthernetScannerDriver.hpp"
 
 // Global variables
 volatile bool keep_running = true;
