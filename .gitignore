@@ -3,4 +3,4 @@ install/
 log/
 .vscode/
 merged_encoder_output.pcd
-pcd_output/
+wecat3d_profile_publisher/pcd_output/
