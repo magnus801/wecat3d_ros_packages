@@ -1,437 +1,495 @@
-#include <iostream>
-#include <csignal>
-#include <unistd.h>
-#include <cstring>
-#include <vector>
-#include <thread>
-#include <exception>
-#include <string>
-#include <chrono>
-#include <iomanip>
-#include <fstream>
+#include "wecat3d_profile_publisher/EthernetScannerDriver.hpp"
 
-#include <rclcpp/rclcpp.hpp>
-#include <sensor_msgs/msg/point_cloud2.hpp>
-#include <sensor_msgs/point_cloud2_iterator.hpp>
+// Global variables
+volatile bool keep_running = true;
+volatile sig_atomic_t stop = false;
 
-#include <dlfcn.h>
-#include "EthernetScannerSDK.h"
-
-/* ───────── Macros and constants (unchanged) ───────── */
-#define WIDTH_X 1280
-#define HEIGHT_Z 1024
-#define SENSOR_BUFFERSIZEMAX 4202500
-#define ENC_SCALE_MM 0.02
-#define PCD_FILE "merged_encoder_output.pcd"
-
-#define SENSOR_CONNECTED 3
-#define SENSOR_DISCONNECTED 0
-#define SENSOR_READDATAOK 0
-#define SENSOR_ERROR -1
-#define SENSOR_GETINFOSMALLBUFFER -2
-#define SENSOR_GETINFONOVALIDINFO -3
-#define SENSOR_GETINFOINVALIDXML -4
-#define SENSOR_GETXZINONEWSCAN -1
-#define SENSOR_GETXZIINVALIDLINDATA -2
-#define SENSOR_GETXZIINVALIDBUFFER -3
-#define SENSOR_READDATAOK 0
-#define SENSOR_READDATASMALLBUFFER -1
-#define SENSOR_READDATANOTSUPPORTEDMODE -2
-#define SENSOR_READDATAFEATURENOTDEFINED -3
-#define SENSOR_READDATANOSCAN -4
-#define SENSOR_READDATAFAILED -5
-#define SENSOR_WRITEDATAINVALIDSOCKET -1
-#define SENSOR_INVALIDHANDLE -1000
-#define SENSOR_GETINFOSMALLERBUFFER -2
-
-/* --- global CTRL-C flag -------------------------------------------- */
-volatile sig_atomic_t stop_flag = 0;
-void signal_handler(int sig) { if (sig == SIGINT) stop_flag = 1; }
-
-/* ───────── helper structs exactly as before ───────── */
-struct UserIOState {
-    int EA1{}, EA2{}, EA3{}, EA4{};
-    int TTLEncA{}, TTLEncB{}, TTLEncC{};
-};
-
-struct ScannedProfile {
-    std::vector<float> roiWidthX;
-    std::vector<float> roiHeightZ;
-    std::vector<uint8_t> intensity;
-    std::vector<float> signalWidth;
-    unsigned int encoderValue{};
-    UserIOState userIOState;
-    int pictureCounter{};
-    int scannedPoints{};
-};
-
-
-
-/* ───────── Function pointer typedefs ───────── */
-using GetConnectStatus_t   = void (*)(void*, int*);
-using GetXZIExtended_t     = int  (*)(void*, double*, double*, int*, int*, int,
-                                       unsigned int*, unsigned char*, int,
-                                       unsigned char*, int, int*);
-using GetImage_t           = int  (*)(void*, char*, int, unsigned int*, unsigned int*,
-                                       unsigned int*, unsigned int*, unsigned int*,
-                                       unsigned int*, unsigned int);
-using Connect_t            = void*(*)(char*, char*, int);
-using Disconnect_t         = void*(*)(void*);
-using GetDllFiFoState_t    = int  (*)(void*);
-using ResetDllFiFo_t       = int  (*)(void*);
-using GetVersion_t         = int  (*)(unsigned char*, int);
-using WriteData_t          = int  (*)(void*, char*, int);
-using ReadData_t           = int  (*)(void*, char*, char*, int, int);
-
-/* ───────── global DLL handles (unchanged names) ───────── */
-static GetConnectStatus_t   p_GetConnectStatus   = nullptr;
-static GetXZIExtended_t     p_GetXZIExtended     = nullptr;
-static GetImage_t           p_GetImage           = nullptr;
-static Connect_t            p_Connect            = nullptr;
-static Disconnect_t         p_Disconnect         = nullptr;
-static GetDllFiFoState_t    p_GetDllFiFoState    = nullptr;
-static ResetDllFiFo_t       p_ResetDllFiFo       = nullptr;
-static GetVersion_t         p_GetVersion         = nullptr;
-static WriteData_t          p_WriteData          = nullptr;
-static ReadData_t           p_ReadData           = nullptr;
-
-/* ───────────────── 1.  typedefs that match the DLL ───────────────── */
-using EthernetScanner_Connect_ptr            = void* (*)(char*, char*, int);
-using EthernetScanner_Disconnect_ptr         = void* (*)(void*);
-using EthernetScanner_GetConnectStatus_ptr   = void  (*)(void*, int*);
-using EthernetScanner_GetXZIExtended_ptr     = int   (*)(void*, double*, double*, int*, int*, int,
-                                                         unsigned int*, unsigned char*, int,
-                                                         unsigned char*, int, int*);
-using EthernetScanner_GetImage_ptr           = int   (*)(void*, char*, int, unsigned int*, unsigned int*,
-                                                         unsigned int*, unsigned int*, unsigned int*,
-                                                         unsigned int*, unsigned int);
-using EthernetScanner_GetDllFiFoState_ptr    = int   (*)(void*);
-using EthernetScanner_ResetDllFiFo_ptr       = int   (*)(void*);
-using EthernetScanner_GetVersion_ptr         = int   (*)(unsigned char*, int);
-using EthernetScanner_WriteData_ptr          = int   (*)(void*, char*, int);
-using EthernetScanner_ReadData_ptr           = int   (*)(void*, char*, char*, int, int);
-
-/* ───────────────── 2.  global pointer variables ──────────────────── */
-static EthernetScanner_Connect_ptr            p_EthernetScanner_Connect            = nullptr;
-static EthernetScanner_Disconnect_ptr         p_EthernetScanner_Disconnect         = nullptr;
-static EthernetScanner_GetConnectStatus_ptr   p_EthernetScanner_GetConnectStatus   = nullptr;
-static EthernetScanner_GetXZIExtended_ptr     p_EthernetScanner_GetXZIExtended     = nullptr;
-static EthernetScanner_GetImage_ptr           p_EthernetScanner_GetImage           = nullptr;
-static EthernetScanner_GetDllFiFoState_ptr    p_EthernetScanner_GetDllFiFoState    = nullptr;
-static EthernetScanner_ResetDllFiFo_ptr       p_EthernetScanner_ResetDllFiFo       = nullptr;
-static EthernetScanner_GetVersion_ptr         p_EthernetScanner_GetVersion         = nullptr;
-static EthernetScanner_WriteData_ptr          p_EthernetScanner_WriteData          = nullptr;
-static EthernetScanner_ReadData_ptr           p_EthernetScanner_ReadData           = nullptr;
-
-/* ───────────────── 3.  platform-neutral loader macro ─────────────── */
-#ifdef _WIN32
-  #define LOAD_SYMBOL(name)                                                     \
-      (p_##name = (name##_ptr)GetProcAddress(libHandle, #name))
-#else
-  #define LOAD_SYMBOL(name)                                                     \
-      (p_##name = (name##_ptr)dlsym(libHandle, #name))
-#endif
-
-/* ───────────────── 4.  libHandle declaration ─────────────────────── */
-#ifdef _WIN32
-  static HMODULE libHandle = nullptr;
-#else
-  static void*   libHandle = nullptr;
-#endif
-
-void unloadEthernetScannerLibrary()
-{
-    if (!libHandle) return;
-#ifdef _WIN32
-    FreeLibrary(libHandle);
-#else
-    dlclose(libHandle);
-#endif
-    libHandle = nullptr;
-    std::cout << "Library unloaded successfully.\n";
+void signal_handler(int signal) {
+    if (signal == SIGINT) {
+        std::cout << "\nInterrupted by user. Stopping sensor..." << std::endl;
+        stop = true;
+    }
 }
-/* ───────────────── 5.  load / unload functions ───────────────────── */
-bool loadEthernetScannerLibrary()
-{
-    /* --- open the .so/.dll --- */
+
+// UserIOState implementation
+UserIOState::UserIOState(int ea1, int ea2, int ea3, int ea4, int ttlA, int ttlB, int ttlC)
+    : EA1(ea1), EA2(ea2), EA3(ea3), EA4(ea4), TTLEncA(ttlA), TTLEncB(ttlB), TTLEncC(ttlC) {}
+
+// ScannedProfile implementation
+ScannedProfile::ScannedProfile() = default;
+
+ScannedProfile::ScannedProfile(int x, int z)
+    : roiWidthX(x, 0), roiHeightZ(z, 0), intensity(1280, 0), signalWidth(1280, 0) {}
+
+ScannedProfile::ScannedProfile(ScannedProfile&& other) noexcept
+    : roiWidthX(std::move(other.roiWidthX)),
+      roiHeightZ(std::move(other.roiHeightZ)),
+      intensity(std::move(other.intensity)),
+      signalWidth(std::move(other.signalWidth)),
+      encoderValue(other.encoderValue),
+      userIOState(std::move(other.userIOState)),
+      pictureCounter(other.pictureCounter),
+      scannedPoints(other.scannedPoints) {}
+
+ScannedProfile& ScannedProfile::operator=(ScannedProfile&& other) noexcept {
+    if (this != &other) {
+        roiWidthX = std::move(other.roiWidthX);
+        roiHeightZ = std::move(other.roiHeightZ);
+        intensity = std::move(other.intensity);
+        signalWidth = std::move(other.signalWidth);
+        encoderValue = other.encoderValue;
+        userIOState = std::move(other.userIOState);
+        pictureCounter = other.pictureCounter;
+        scannedPoints = other.scannedPoints;
+    }
+    return *this;
+}
+
+// Exception class implementation
+SensorException::SensorException(const std::string& message)
+    : std::runtime_error(message) {}
+
+// Function pointer variables
+EthernetScanner_GetConnectStatus_ptr p_EthernetScanner_GetConnectStatus = nullptr;
+EthernetScanner_GetXZIExtended_ptr p_EthernetScanner_GetXZIExtended = nullptr;
+EthernetScanner_GetImage_ptr p_EthernetScanner_GetImage = nullptr;
+EthernetScanner_Connect_ptr p_EthernetScanner_Connect = nullptr;
+EthernetScanner_Disconnect_ptr p_EthernetScanner_Disconnect = nullptr;
+EthernetScanner_GetDllFiFoState_ptr p_EthernetScanner_GetDllFiFoState = nullptr;
+EthernetScanner_ResetDllFiFo_ptr p_EthernetScanner_ResetDllFiFo = nullptr;
+EthernetScanner_GetVersion_ptr p_EthernetScanner_GetVersion = nullptr;
+EthernetScanner_WriteData_ptr p_EthernetScanner_WriteData = nullptr;
+EthernetScanner_ReadData_ptr p_EthernetScanner_ReadData = nullptr;
+
+// Library handle
+#ifdef _WIN32
+HMODULE libHandle = nullptr;
+#else
+void* libHandle = nullptr;
+#endif
+
+// Library loading/unloading
+bool loadEthernetScannerLibrary() {
 #ifdef _WIN32
     libHandle = LoadLibrary("EthernetScanner.dll");
 #else
-    const char* paths[] = { "./libEthernetScanner.so",
-                            "/usr/local/lib/libEthernetScanner.so",
-                            "/usr/lib/libEthernetScanner.so",
-                            "libEthernetScanner.so" };
-    for (const char* p : paths)
-        if ((libHandle = dlopen(p, RTLD_LAZY))) {
-            std::cout << "Successfully loaded library from: " << p << '\n'; break;
+    const char* library_paths[] = {
+        "./libEthernetScanner.so",
+        "libEthernetScanner.so"
+    };
+    for (const char* path : library_paths) {
+        libHandle = dlopen(path, RTLD_LAZY);
+        if (libHandle) {
+            std::cout << "Successfully loaded library from: " << path << std::endl;
+            break;
         }
+    }
 #endif
     if (!libHandle) {
-        std::cerr << "Failed to load EthernetScanner library! " << dlerror() << '\n';
+        std::cerr << "Failed to load EthernetScanner library!" << std::endl;
+        std::cerr << "Error: " << dlerror() << std::endl;
         return false;
     }
-
-    /* --- resolve every symbol, abort if any is missing --- */
-    if (!LOAD_SYMBOL(EthernetScanner_Connect)            ||
-        !LOAD_SYMBOL(EthernetScanner_Disconnect)         ||
-        !LOAD_SYMBOL(EthernetScanner_GetConnectStatus)   ||
-        !LOAD_SYMBOL(EthernetScanner_GetXZIExtended)     ||
-        !LOAD_SYMBOL(EthernetScanner_GetImage)           ||
-        !LOAD_SYMBOL(EthernetScanner_GetDllFiFoState)    ||
-        !LOAD_SYMBOL(EthernetScanner_ResetDllFiFo)       ||
-        !LOAD_SYMBOL(EthernetScanner_GetVersion)         ||
-        !LOAD_SYMBOL(EthernetScanner_WriteData)          ||
-        !LOAD_SYMBOL(EthernetScanner_ReadData))
-    {
-        std::cerr << " One or more DLL symbols could not be resolved.\n";
-        unloadEthernetScannerLibrary();
+#ifdef _WIN32
+    #define LOAD_SYMBOL(name) (name = (name##_ptr)GetProcAddress(libHandle, #name))
+#else
+    #define LOAD_SYMBOL(name) (p_##name = (name##_ptr)dlsym(libHandle, #name))
+#endif
+    if (!LOAD_SYMBOL(EthernetScanner_Connect)) {
+        std::cerr << "Failed to load EthernetScanner_Connect: " << dlerror() << std::endl;
         return false;
     }
-
-    p_Connect           =p_EthernetScanner_Connect;
-    p_Disconnect        =p_EthernetScanner_Disconnect;
-    p_GetConnectStatus  =p_EthernetScanner_GetConnectStatus;
-    p_GetXZIExtended    =p_EthernetScanner_GetXZIExtended;
-    p_GetImage          =p_EthernetScanner_GetImage;
-    p_GetDllFiFoState   =p_EthernetScanner_GetDllFiFoState;
-    p_ResetDllFiFo      =p_EthernetScanner_ResetDllFiFo;
-    p_GetVersion        =p_EthernetScanner_GetVersion;
-    p_WriteData         =p_EthernetScanner_WriteData;
-    p_ReadData          =p_EthernetScanner_ReadData;
-
-
-    std::cout << "All EthernetScanner symbols loaded successfully.\n";
+    if (!LOAD_SYMBOL(EthernetScanner_Disconnect)) {
+        std::cerr << "Failed to load EthernetScanner_Disconnect: " << dlerror() << std::endl;
+        return false;
+    }
+    if (!LOAD_SYMBOL(EthernetScanner_GetConnectStatus)) {
+        std::cerr << "Failed to load EthernetScanner_GetConnectStatus: " << dlerror() << std::endl;
+        return false;
+    }
+    if (!LOAD_SYMBOL(EthernetScanner_GetXZIExtended)) {
+        std::cerr << "Failed to load EthernetScanner_GetXZIExtended: " << dlerror() << std::endl;
+        return false;
+    }
+    if (!LOAD_SYMBOL(EthernetScanner_GetImage)) {
+        std::cerr << "Failed to load EthernetScanner_GetImage: " << dlerror() << std::endl;
+        return false;
+    }
+    if (!LOAD_SYMBOL(EthernetScanner_GetDllFiFoState)) {
+        std::cerr << "Failed to load EthernetScanner_GetDllFiFoState: " << dlerror() << std::endl;
+        return false;
+    }
+    if (!LOAD_SYMBOL(EthernetScanner_ResetDllFiFo)) {
+        std::cerr << "Failed to load EthernetScanner_ResetDllFiFo: " << dlerror() << std::endl;
+        return false;
+    }
+    if (!LOAD_SYMBOL(EthernetScanner_GetVersion)) {
+        std::cerr << "Failed to load EthernetScanner_GetVersion: " << dlerror() << std::endl;
+        return false;
+    }
+    if (!LOAD_SYMBOL(EthernetScanner_WriteData)) {
+        std::cerr << "Failed to load EthernetScanner_WriteData: " << dlerror() << std::endl;
+        return false;
+    }
+    if (!LOAD_SYMBOL(EthernetScanner_ReadData)) {
+        std::cerr << "Failed to load EthernetScanner_ReadData: " << dlerror() << std::endl;
+        return false;
+    }
     return true;
 }
 
-
-
-/* ───────── Exception class ───────── */
-class SensorException : public std::runtime_error {
-public: explicit SensorException(const std::string& m) : std::runtime_error(m) {}
-};
-
-/* ───────── Sensor wrapper (same interface) ───────── */
-class Sensor {
-public:
-    Sensor(const std::string& ip, int port);
-    ~Sensor();
-
-    void connect(int timeout_ms = 0);
-    void disconnect();
-
-    int  get_connect_status() const;
-    ScannedProfile get_scanned_profile(int timeout_ms = 1000);
-
-    void write_data(const std::string& cmd);
-    std::string read_data(const std::string& cmd, int cache = 0);
-
-private:
-    void allocate();
-    void release();
-
-    std::string ip_, port_;
-    void* handle_{nullptr};
-
-    /* raw buffers */
-    double *roiX_{}, *roiZ_{};
-    int    *inten_{}, *sigW_{};
-    uint32_t *encVal_{}, *uio_{};
-    int *picCnt_{};
-
-    static constexpr size_t READ_SZ = 128*1024;
-    char readBuf_[READ_SZ]{};
-};
-
-/* ---------- implementation (same logic as before) ----------------- */
-Sensor::Sensor(const std::string& ip, int port)
-    : ip_(ip), port_(std::to_string(port)) {}
-
-Sensor::~Sensor() { if (handle_) disconnect(); }
-
-void Sensor::connect(int timeout_ms)
-{
-    std::vector<char> ipBuf (ip_.begin(),  ip_.end());  ipBuf .push_back('\0');
-    std::vector<char> portBuf(port_.begin(),port_.end());portBuf.push_back('\0');
-
-    handle_ = p_Connect(ipBuf.data(), portBuf.data(), timeout_ms);
-    auto t0 = std::chrono::steady_clock::now();
-    while (!handle_ &&
-           (timeout_ms == 0 ||                          // 0 → keep trying forever
-            std::chrono::steady_clock::now() - t0 <
-            std::chrono::milliseconds(timeout_ms)))
-    {
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
-        handle_ = p_Connect(ipBuf.data(), portBuf.data(), 0);
+void unloadEthernetScannerLibrary() {
+    if (libHandle) {
+#ifdef _WIN32
+        FreeLibrary(libHandle);
+#else
+        dlclose(libHandle);
+#endif
+        libHandle = nullptr;
     }
-    if (!handle_)
-        throw SensorException("Connect failed: no handle from DLL");
-    std::this_thread::sleep_for(std::chrono::milliseconds(500));  // scanner init
-    if (get_connect_status() != SENSOR_CONNECTED)
-        throw SensorException("Connect failed: status != CONNECTED");
-    allocate();
 }
-void Sensor::disconnect()
-{
-    handle_ = p_Disconnect(handle_);
-    release();
-}
-int Sensor::get_connect_status() const
-{
-    int st{}; p_GetConnectStatus(handle_, &st);
-    return (st & SENSOR_CONNECTED) ? SENSOR_CONNECTED : SENSOR_DISCONNECTED;
-}
-void Sensor::allocate()
-{
-    roiX_ = new double[SENSOR_BUFFERSIZEMAX]{};
-    roiZ_ = new double[SENSOR_BUFFERSIZEMAX]{};
-    inten_= new int   [SENSOR_BUFFERSIZEMAX]{};
-    sigW_ = new int   [SENSOR_BUFFERSIZEMAX]{};
-    encVal_ = new uint32_t(0);
-    uio_    = new uint32_t(0);
-    picCnt_ = new int(0);
-}
-void Sensor::release()
-{
-    delete[] roiX_;  delete[] roiZ_;  delete[] inten_; delete[] sigW_;
-    delete encVal_;  delete uio_;     delete picCnt_;
-}
-ScannedProfile Sensor::get_scanned_profile(int timeout_ms)
-{
-    int resp = p_GetXZIExtended(
-        handle_,
-        roiX_, roiZ_, inten_, sigW_, SENSOR_BUFFERSIZEMAX,
-        encVal_, reinterpret_cast<unsigned char*>(uio_),
-        timeout_ms, nullptr, 0, picCnt_);
 
-    if (resp < 0) throw SensorException("GetXZIExtended error " + std::to_string(resp));
-
-    ScannedProfile out;
-    out.scannedPoints = resp;
-    out.encoderValue  = *encVal_;
-    out.pictureCounter= *picCnt_;
-
-    out.roiWidthX .assign(roiX_, roiX_ + resp);
-    out.roiHeightZ.assign(roiZ_, roiZ_ + resp);
-
-    uint32_t u = *uio_;
-    out.userIOState = { int(u&1), int((u>>1)&1), int((u>>2)&1), int((u>>3)&1),
-                        int((u>>4)&1), int((u>>5)&1), int((u>>6)&1) };
-
-    return out;
+// Sensor class implementation
+Sensor::Sensor(const std::string& ipAddress, int portNumber)
+    : ip(ipAddress), port(std::to_string(portNumber)),
+      handle(nullptr), status(0), rawBufferSize(0) {
+    read_buf = std::make_unique<char[]>(read_buf_size);
+    std::memset(read_buf.get(), 0, read_buf_size);
 }
-void Sensor::write_data(const std::string& cmd)
-{
-    std::vector<char> buf(cmd.begin(), cmd.end()); buf.push_back('\0');
-    int rc = p_WriteData(handle_, buf.data(), cmd.size());
-    if (rc != static_cast<int>(cmd.size()))
-        throw SensorException("WriteData failed: " + cmd);
+
+void Sensor::connect(int timeout) {
+    if (!p_EthernetScanner_Connect) {
+        throw std::runtime_error("EthernetScanner_Connect function not loaded!");
+    }
+    std::vector<char> ip_copy(ip.begin(), ip.end());
+    ip_copy.push_back('\0');
+    std::vector<char> port_copy(port.begin(), port.end());
+    port_copy.push_back('\0');
+    std::cout << "Calling EthernetScanner_Connect with IP: " << ip << ", Port: " << port << ", Timeout: " << timeout << std::endl;
+    handle = p_EthernetScanner_Connect(ip_copy.data(), port_copy.data(), timeout);
+    if (!handle) {
+        std::cout << "Initial connection attempt returned null handle" << std::endl;
+    } else {
+        std::cout << "Got handle from EthernetScanner_Connect: " << handle << std::endl;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    auto connectionPollingStart = std::chrono::steady_clock::now();
+    while (!handle && std::chrono::steady_clock::now() - connectionPollingStart < std::chrono::milliseconds(timeout)) {
+    }
+    int connectionStatus = get_connect_status();
+    if (connectionStatus != SENSOR_CONNECTED) {
+        throw std::runtime_error("Failed to connect with the sensor; Connection status: " + std::to_string(connectionStatus));
+    }
+    std::cout << "Sensor has been connected successfully. Status: " << connectionStatus << "\n";
+    allocate_memory();
+}
+
+void Sensor::disconnect() {
+    handle = p_EthernetScanner_Disconnect(handle);
+    if (handle) {
+        throw std::runtime_error("Failed to disconnect the sensor.");
+    }
+    deallocate_memory();
+}
+
+int Sensor::get_connect_status() {
+    if (!p_EthernetScanner_GetConnectStatus) {
+        return SENSOR_DISCONNECTED;
+    }
+    if (!handle) {
+        return SENSOR_DISCONNECTED;
+    }
+    p_EthernetScanner_GetConnectStatus(handle, &status);
+    int result = (status & SENSOR_CONNECTED) ? SENSOR_CONNECTED : SENSOR_DISCONNECTED;
+    return result;
+}
+
+void Sensor::allocate_memory() {
+    roiWidthX = std::make_unique<double[]>(SENSOR_BUFFERSIZEMAX);
+    roiHeightZ = std::make_unique<double[]>(SENSOR_BUFFERSIZEMAX);
+    intensity = std::make_unique<int[]>(SENSOR_BUFFERSIZEMAX);
+    signalWidth = std::make_unique<int[]>(SENSOR_BUFFERSIZEMAX);
+    encoderValue = std::make_unique<uint32_t>(0);
+    userIOState = std::make_unique<uint32_t>(0);
+    pictureCounter = std::make_unique<int>(0);
+    rawBuffer = std::make_unique<char[]>(SENSOR_BUFFERSIZEMAX);
+    rawBufferSize = SENSOR_BUFFERSIZEMAX;
+    width = std::make_unique<uint32_t[]>(SENSOR_BUFFERSIZEMAX);
+    height = std::make_unique<uint32_t[]>(SENSOR_BUFFERSIZEMAX);
+    offsetX = std::make_unique<uint32_t[]>(SENSOR_BUFFERSIZEMAX);
+    offsetY = std::make_unique<uint32_t[]>(SENSOR_BUFFERSIZEMAX);
+    stepX = std::make_unique<uint32_t[]>(SENSOR_BUFFERSIZEMAX);
+    stepY = std::make_unique<uint32_t[]>(SENSOR_BUFFERSIZEMAX);
+    std::memset(roiWidthX.get(), 0, SENSOR_BUFFERSIZEMAX * sizeof(double));
+    std::memset(roiHeightZ.get(), 0, SENSOR_BUFFERSIZEMAX * sizeof(double));
+    std::memset(intensity.get(), 0, SENSOR_BUFFERSIZEMAX * sizeof(int));
+    std::memset(signalWidth.get(), 0, SENSOR_BUFFERSIZEMAX * sizeof(int));
+    std::memset(rawBuffer.get(), 0, SENSOR_BUFFERSIZEMAX);
+    std::memset(width.get(), 0, SENSOR_BUFFERSIZEMAX * sizeof(uint32_t));
+    std::memset(height.get(), 0, SENSOR_BUFFERSIZEMAX * sizeof(uint32_t));
+    std::memset(offsetX.get(), 0, SENSOR_BUFFERSIZEMAX * sizeof(uint32_t));
+    std::memset(offsetY.get(), 0, SENSOR_BUFFERSIZEMAX * sizeof(uint32_t));
+    std::memset(stepX.get(), 0, SENSOR_BUFFERSIZEMAX * sizeof(uint32_t));
+    std::memset(stepY.get(), 0, SENSOR_BUFFERSIZEMAX * sizeof(uint32_t));
+}
+
+void Sensor::deallocate_memory() {
+    roiWidthX.reset();
+    roiHeightZ.reset();
+    intensity.reset();
+    signalWidth.reset();
+    encoderValue.reset();
+    userIOState.reset();
+    pictureCounter.reset();
+    rawBuffer.reset();
+    width.reset();
+    height.reset();
+    offsetX.reset();
+    offsetY.reset();
+    stepX.reset();
+    stepY.reset();
+    rawBufferSize = 0;
+}
+
+CameraImage Sensor::get_camera_image(int timeout) {
+    std::cout << "Reading camera image ...\n";
+    int response = p_EthernetScanner_GetImage(
+        handle,
+        rawBuffer.get(),
+        rawBufferSize,
+        width.get(),
+        height.get(),
+        offsetX.get(),
+        offsetY.get(),
+        stepX.get(),
+        stepY.get(),
+        static_cast<uint32_t>(timeout)
+    );
+    if (response < 0) {
+        throw SensorException("Failed to get camera image. Error code: " + std::to_string(response));
+    }
+    std::cout << "Camera image received successfully\n";
+    uint32_t imgResolution = width[0] * height[0];
+    std::vector<uint8_t> imgData(rawBuffer.get(), rawBuffer.get() + imgResolution);
+    CameraImage img;
+    img.rawImageData = std::move(imgData);
+    img.imgWidth = width[0];
+    img.imgHeight = height[0];
+    img.imgOffsetX = offsetX[0];
+    img.imgOffsetY = offsetY[0];
+    img.imgStepX = stepX[0];
+    img.imgStepY = stepY[0];
+    return img;
+}
+
+void Sensor::get_scanned_profile(ScannedProfile& profile, int timeout) {
+    unsigned char* ucBufferRaw = nullptr;
+    int iBufferRaw = 0;
+    int response = p_EthernetScanner_GetXZIExtended(
+        handle,
+        roiWidthX.get(),
+        roiHeightZ.get(),
+        intensity.get(),
+        signalWidth.get(),
+        rawBufferSize,
+        encoderValue.get(),
+        (unsigned char*)userIOState.get(),
+        timeout,
+        ucBufferRaw,
+        iBufferRaw,
+        pictureCounter.get()
+    );
+    if (response < 0) {
+        throw SensorException("Failed to get scanned profile. Error code: " + std::to_string(response));
+    }
+    std::cout << "Raw intensity from sensor before copying to profile:\n";
+    for (int i = 0; i < response && i < 1280; ++i) {
+        std::cout << "Sensor Intensity[" << i << "] = " << intensity[i] << std::endl;
+    }
+    profile.encoderValue = *encoderValue;
+    profile.userIOState = UserIOState(
+        ((*userIOState) & 0b1),
+        ((*userIOState) & 0b10) >> 1,
+        ((*userIOState) & 0b100) >> 2,
+        ((*userIOState) & 0b1000) >> 3,
+        ((*userIOState) & 0b10000) >> 4,
+        ((*userIOState) & 0b100000) >> 5,
+        ((*userIOState) & 0b1000000) >> 6
+    );
+    profile.roiWidthX.resize(response);
+    profile.roiHeightZ.resize(response);
+    profile.intensity.resize(response);
+    profile.signalWidth.resize(response);
+    for (int i = 0; i < response; ++i) {
+        profile.roiWidthX[i] = roiWidthX [i];
+        profile.roiHeightZ[i] = roiHeightZ[i];
+        profile.intensity[i]=intensity[i];
+    }
+    profile.pictureCounter = *pictureCounter;
+    profile.scannedPoints = response;
+}
+
+std::string Sensor::get_dll_version() {
+    int response = p_EthernetScanner_GetVersion(reinterpret_cast<unsigned char*>(read_buf.get()), read_buf_size);
+    if (response < 0) {
+        throw SensorException("Failed to get DLL version. Error code: " + std::to_string(response));
+    }
+    return std::string(read_buf.get());
+}
+
+std::string Sensor::read_data(const std::string& command, int cacheTime) {
+    std::vector<char> cmdBuffer(command.begin(), command.end());
+    cmdBuffer.push_back('\0');
+    int response = p_EthernetScanner_ReadData(
+        handle,
+        cmdBuffer.data(),
+        read_buf.get(),
+        read_buf_size,
+        cacheTime
+    );
+    if (response == SENSOR_READDATAOK) {
+        std::cout << "Sent Read Data command " << command << " -> Response: " << read_buf.get() << " (Sensor_READDATAOK)\n";
+    } else {
+        throw SensorException("Failed to read data. Error code: " + std::to_string(response));
+    }
+    return std::string(read_buf.get());
+}
+
+int Sensor::write_data(const std::string& command) {
+    std::vector<char> cmdBuffer(command.begin(), command.end());
+    cmdBuffer.push_back('\0');
+    int response = p_EthernetScanner_WriteData(
+        handle,
+        cmdBuffer.data(),
+        static_cast<int>(command.size())
+    );
+    int responseExpected = static_cast<int>(command.size());
+    if (response == responseExpected) {
+        std::cout << "Sent Write Data command " << command << " -> Response: " << response << " (len(command))\n";
+    } else if (response > 0 && response < responseExpected) {
+        std::cerr << "Warning: Sent Write Data command " << command << " -> Response: " << response << "; Expected: " << responseExpected << " (len(command))\n";
+    } else {
+        throw SensorException("Failed to write data. Error code: " + std::to_string(response));
+    }
     std::this_thread::sleep_for(std::chrono::milliseconds(10));
-}
-std::string Sensor::read_data(const std::string& cmd, int cache)
-{
-    std::vector<char> c(cmd.begin(), cmd.end()); c.push_back('\0');
-    int rc = p_ReadData(handle_, c.data(), readBuf_, READ_SZ, cache);
-    if (rc != SENSOR_READDATAOK)
-        throw SensorException("ReadData failed: " + cmd);
-    return std::string(readBuf_);
+    return response;
 }
 
-/* ────────────────────────────────────────────────────────────────── */
-/*                               main                                 */
-/* ─────────────────────────────────────────────────────────────────── */
-int main(int argc, char* argv[])
-{
+int main(int argc, char* argv[]) {
     rclcpp::init(argc, argv);
-    std::signal(SIGINT, signal_handler);
-
-    auto node = rclcpp::Node::make_shared("profile_publisher_node");
-    auto pub  = node->create_publisher<sensor_msgs::msg::PointCloud2>(
-                    "/wecat3d/pointcloud", 10);
-
-    /* ---- open PCD file with placeholder header (unchanged) ---- */
-    std::ofstream pcd("merged_encoder_output.pcd", std::ios::trunc);
-    pcd << "# .PCD v0.7 - Point Cloud Data file\nVERSION 0.7\nFIELDS x y z\n"
-        << "SIZE 4 4 4\nTYPE F F F\nCOUNT 1 1 1\n"
-        << "WIDTH 0000000000\nHEIGHT 1\nVIEWPOINT 0 0 0 1 0 0 0\n"
-        << "POINTS 0000000000\nDATA ascii\n";
-    std::streampos header_start = 0;
-
+    signal(SIGINT, signal_handler);
+    auto node = rclcpp::Node::make_shared("wecat3d_runtime_node");
+    auto pub = node->create_publisher<sensor_msgs::msg::PointCloud2>("/wenglor2/pointcloud", 10);
+    std::string output_dir = "/tmp";  
+    char* pcd_output_dir = std::getenv("PCD_OUTPUT_DIR");
+    if (pcd_output_dir != nullptr) {
+        output_dir = std::string(pcd_output_dir);
+    }
+    std::string pcd_filename = output_dir + "/merged_encoder_output.pcd";
+    std::ofstream pcd_file(pcd_filename, std::ios::out | std::ios::trunc);
+    if (!pcd_file.is_open()) {
+        std::cerr << "Failed to open PCD file for writing!" << std::endl;
+        return 1;
+    }
+    std::streampos header_start = pcd_file.tellp();
+    pcd_file << "# .PCD v0.7 - Point Cloud Data file\n";
+    pcd_file << "VERSION 0.7\n";
+    pcd_file << "FIELDS x y z intensity\n";
+    pcd_file << "SIZE 4 4 4 4\n";
+    pcd_file << "TYPE F F F I\n";
+    pcd_file << "COUNT 1 1 1 1\n";
+    pcd_file << "WIDTH 0000000000\n";
+    pcd_file << "HEIGHT 1\n";
+    pcd_file << "VIEWPOINT 0 0 0 1 0 0 0\n";
+    pcd_file << "POINTS 0000000000\n";
+    pcd_file << "DATA ascii\n";
+    std::streampos data_start = pcd_file.tellp();
     uint64_t total_points = 0;
-
-    if (!loadEthernetScannerLibrary()) return 1;
-
+    if (!loadEthernetScannerLibrary()) {
+        std::cerr << "Failed to load EthernetScanner library!" << std::endl;
+        pcd_file.close();
+        return 1;
+    }
     try {
-        Sensor sensor("192.168.100.1", 32001);
-        sensor.connect(3000);
-
+        Sensor sensor("192.168.171.52", 32001);
+        sensor.connect(0);
         sensor.write_data("SetHeartbeat=1000");
         sensor.write_data("SetExposureTime=750");
         sensor.write_data("SetTriggerSource=2");
-        sensor.write_data("SetTriggerEncoderStep=20");
+        sensor.write_data("SetTriggerEncoderStep=0");
         sensor.write_data("SetEncoderTriggerFunction=2");
         sensor.write_data("ResetEncoder");
         sensor.write_data("SetRangeImageNrProfiles=1");
         sensor.write_data("SetAcquisitionStart");
-
-        /* ROS message scaffold */
+        int scanNo = 0;
+        int64_t last_encoder = std::numeric_limits<int64_t>::min();
+        bool first_scan = true;
+        int64_t encoder_offset = 0;
         sensor_msgs::msg::PointCloud2 msg;
         sensor_msgs::PointCloud2Modifier mod(msg);
-        mod.setPointCloud2FieldsByString(1,"xyz");
+        mod.setPointCloud2FieldsByString(1, "xyz");
         msg.header.frame_id = "map";
-        msg.height = 1; msg.is_dense = false; msg.is_bigendian = false;
-        const float to_m = 0.001f;
-
-        int64_t last_enc = std::numeric_limits<int64_t>::min();
-        int scanNo = 0;
-
-        while (!stop_flag) {
+        msg.height = 1;
+        msg.is_dense = false;
+        msg.is_bigendian = false;
+        const float scale_factor = 1.0f / 1000.0f;
+        std::signal(SIGINT, signal_handler);
+        ScannedProfile scan(1280, 1024);
+        while (!stop) {
             try {
-                ScannedProfile scan = sensor.get_scanned_profile(1000);
-                ++scanNo;
+                sensor.get_scanned_profile(scan, 1000);
+                std::cout << "Raw intensity from sensor before after copying to profile:\n";
+                for (int i = 0; i < scan.scannedPoints && i < 1280; ++i) {
+                    std::cout << "Sensor Intensity[" << i << "] = " << scan.intensity[i] << std::endl;
+                }
+                scanNo++;
+                size_t n_valid = scan.scannedPoints;
+                std::vector<double>& x_values = scan.roiWidthX;
+                std::vector<double>& z_values = scan.roiHeightZ;
+                uint32_t encoder_unsigned = scan.encoderValue;
+                int64_t encoder = static_cast<int64_t>(encoder_unsigned);
 
-                const auto& X = scan.roiWidthX;
-                const auto& Z = scan.roiHeightZ;
-                size_t n_valid = scan.scannedPoints;          // ← FIX #1
+                if (encoder_unsigned >= static_cast<uint32_t>(1ULL << 31)) {
+                    encoder -= static_cast<int64_t>(1ULL << 32);
+                }
 
-                /* signed encoder */
-                int64_t enc = scan.encoderValue < (1u<<31)
-                            ? scan.encoderValue
-                            : (int64_t)scan.encoderValue - (1ll<<32);
-
-                if (last_enc == std::numeric_limits<int64_t>::min() || enc != last_enc)
-                {
-                    double y_mm = enc * ENC_SCALE_MM;
-
-                    /* write points */
-                    for (size_t i=0; i<n_valid; ++i)
-                        pcd << std::fixed << std::setprecision(6)
-                            << X[i] << ' ' << y_mm << ' ' << Z[i] << '\n';
-                    total_points += n_valid;                   // ← keeps header right
-
-                    /* ROS message */
+                if (first_scan) {
+                    encoder_offset = encoder;
+                    first_scan = false;
+                    std::cout << "Starting encoder offset: " << encoder_offset << std::endl;
+                }
+                int64_t encoder_relative = encoder - encoder_offset;
+                if (last_encoder == std::numeric_limits<int64_t>::min() || encoder != last_encoder) {
+                    double y_value = encoder_relative * ENC_SCALE_MM;
+                     for (size_t i = 0; i < n_valid; ++i) {
+                        pcd_file << std::fixed << std::setprecision(6)
+                                << x_values[i] << " "
+                                << y_value << " "
+                                << z_values[i] << " "
+                                << scan.intensity[i]  << "\n";
+                    }
+                    pcd_file.flush();
+                    total_points += x_values.size();
                     msg.header.stamp = node->now();
-                    if (msg.width != n_valid) { msg.width = n_valid; mod.resize(n_valid); }  // ← FIX #3
-
-                    sensor_msgs::PointCloud2Iterator<float>
-                        it_x(msg,"x"), it_y(msg,"y"), it_z(msg,"z");
-                    float y_m = static_cast<float>(y_mm)*to_m;
-                    for (size_t i=0;i<n_valid;++i,++it_x,++it_y,++it_z)
-                    {
-                        *it_x = X[i]*to_m;
-                        *it_y = y_m;
-                        *it_z = Z[i]*to_m;
+                    if (msg.width != x_values.size()) {
+                        msg.width = x_values.size();
+                        mod.resize(x_values.size());
+                    }
+                    sensor_msgs::PointCloud2Iterator<float> it_x(msg, "x");
+                    sensor_msgs::PointCloud2Iterator<float> it_y(msg, "y");
+                    sensor_msgs::PointCloud2Iterator<float> it_z(msg, "z");
+                    float y_scaled = y_value * scale_factor;
+                    for (size_t i = 0; i < x_values.size(); ++i, ++it_x, ++it_y, ++it_z) {
+                        *it_x = x_values[i] * scale_factor;
+                        *it_y = y_scaled;
+                        *it_z = z_values[i] * scale_factor;
                     }
                     pub->publish(msg);
-
-                    if (scanNo % 500 == 0)
-                        std::cout << "Scans: " << scanNo
-                                << "  Points: " << total_points << '\n';
+                    if (scanNo % 500 == 0) {
+                        std::cout << "Processed " << scanNo << " scans, total points: " << total_points << std::endl;
+                    }
                 }
-                last_enc = enc;
-
-                rclcpp::spin_some(node);
-
+                last_encoder = encoder;
             } catch (const SensorException& e) {
                 if (std::string(e.what()).find("-1") != std::string::npos) {
                     continue;
@@ -440,25 +498,38 @@ int main(int argc, char* argv[])
                 }
             }
         }
-        /* ---- rewrite header with real counts ---- */
-        pcd.seekp(header_start);
-        pcd << "# .PCD v0.7 - Point Cloud Data file\nVERSION 0.7\nFIELDS x y z\n"
-            << "SIZE 4 4 4\nTYPE F F F\nCOUNT 1 1 1\n"
-            << "WIDTH "  << std::setw(10) << std::setfill('0') << total_points << '\n'
-            << "HEIGHT 1\nVIEWPOINT 0 0 0 1 0 0 0\nPOINTS "
-            << std::setw(10) << std::setfill('0') << total_points << '\n'
-            << "DATA ascii\n";
-        pcd.close();
-
+        std::streampos current_pos = pcd_file.tellp();
+        pcd_file.seekp(header_start);
+        pcd_file << "# .PCD v0.7 - Point Cloud Data file\n";
+        pcd_file << "VERSION 0.7\n";
+        pcd_file << "FIELDS x y z intensity\n";
+        pcd_file << "SIZE 4 4 4 4\n";
+        pcd_file << "TYPE F F F I\n";
+        pcd_file << "COUNT 1 1 1 1\n";
+        pcd_file << "WIDTH " << std::setw(10) << std::setfill('0') << total_points << "\n";
+        pcd_file << "HEIGHT 1\n";
+        pcd_file << "VIEWPOINT 0 0 0 1 0 0 0\n";
+        pcd_file << "POINTS " << std::setw(10) << std::setfill('0') << total_points << "\n";
+        pcd_file << "DATA ascii\n";
+        pcd_file.close();
+        std::cout << "Final PCD saved with " << total_points << " points" << std::endl;
+        std::cout << "Getting connection status..." << std::endl;
+        int status = sensor.get_connect_status();
+        if (status == SENSOR_CONNECTED) {
+            std::cout << "Sensor is confirmed to be connected." << std::endl;
+        } else {
+            std::cout << "Sensor is NOT connected after attempt." << std::endl;
+        }
         sensor.write_data("SetAcquisitionStop");
         sensor.write_data("SetResetSettings");
         sensor.disconnect();
+        rclcpp::shutdown();
+    } catch (const std::exception& e) {
+        std::cerr << "Exception occurred: " << e.what() << std::endl;
+        pcd_file.close();
+        unloadEthernetScannerLibrary();
+        return 1;
     }
-    catch (const std::exception& e) {
-        std::cerr << "Fatal: " << e.what() << '\n';
-    }
-
     unloadEthernetScannerLibrary();
-    rclcpp::shutdown();
     return 0;
 }

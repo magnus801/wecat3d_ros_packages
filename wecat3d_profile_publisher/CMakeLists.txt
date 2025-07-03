@@ -16,6 +16,8 @@ find_package(Boost REQUIRED COMPONENTS system filesystem iostreams thread date_t
 find_package(pcl_conversions REQUIRED)
 find_package(wecat3d_sdk REQUIRED)  # Critical missing dependency!
 
+ament_environment_hooks(env/set_pcd_path.sh)
+
 # ======== Target Setup ========
 add_library(profile_generator_lib
   src/profile_generator.cpp
@@ -77,6 +79,34 @@ install(TARGETS profile_generator_lib
 )
 
 install(DIRECTORY include/ DESTINATION include)
+
+# Install the environment hook with proper permissions
+install(
+  FILES env/set_pcd_path.sh
+  DESTINATION share/${PROJECT_NAME}/env
+  PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE GROUP_READ GROUP_EXECUTE WORLD_READ WORLD_EXECUTE
+)
+
+# Install the pcd_output directory
+install(
+  DIRECTORY pcd_output/
+  DESTINATION share/${PROJECT_NAME}/pcd_output
+)
+
+install(
+  PROGRAMS   scripts/gauge_measurment.py
+  DESTINATION lib/${PROJECT_NAME}
+)
+
+install(
+  PROGRAMS   scripts/combined_wenglor.py
+  DESTINATION lib/${PROJECT_NAME}
+)
+
+install(
+  PROGRAMS scripts/drishti_odometry.py
+  DESTINATION lib/${PROJECT_NAME}
+)
 
 # ======== Exports ========
 ament_export_targets(export_${PROJECT_NAME} HAS_LIBRARY_TARGET)

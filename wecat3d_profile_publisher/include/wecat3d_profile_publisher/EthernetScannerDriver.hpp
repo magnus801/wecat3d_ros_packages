@@ -25,7 +25,7 @@
 #define WIDTH_X 1280
 #define HEIGHT_Z 1024
 #define SENSOR_BUFFERSIZEMAX 4202500
-#define ENC_SCALE_MM 0.02
+#define ENC_SCALE_MM 0.047
 #define PCD_FILE "merged.pcd"
 #define SENSOR_OK 0
 #define SENSOR_ERROR -1
@@ -68,9 +68,9 @@ struct UserIOState {
 
 // ScannedProfile struct
 struct ScannedProfile {
-    std::vector<float> roiWidthX;
-    std::vector<float> roiHeightZ;
-    std::vector<uint8_t> intensity;
+    std::vector<double> roiWidthX;
+    std::vector<double> roiHeightZ;
+    std::vector<int> intensity;
     std::vector<float> signalWidth;
     unsigned int encoderValue;
     UserIOState userIOState;

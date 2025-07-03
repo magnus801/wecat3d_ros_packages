@@ -20,5 +20,7 @@
   
   <export>
     <build_type>ament_cmake</build_type>
+    <environment_hooks>env/set_pcd_path.sh</environment_hooks>
   </export>
+  
 </package>

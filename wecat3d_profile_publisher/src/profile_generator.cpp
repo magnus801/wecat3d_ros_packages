@@ -19,7 +19,7 @@ UserIOState::UserIOState(int ea1, int ea2, int ea3, int ea4, int ttlA, int ttlB,
 ScannedProfile::ScannedProfile() = default;
 
 ScannedProfile::ScannedProfile(int x, int z)
-    : roiWidthX(x, 0), roiHeightZ(z, 0), intensity(1200, 0), signalWidth(1200, 0) {}
+    : roiWidthX(x, 0), roiHeightZ(z, 0), intensity(1280, 0), signalWidth(1280, 0) {}
 
 ScannedProfile::ScannedProfile(ScannedProfile&& other) noexcept
     : roiWidthX(std::move(other.roiWidthX)),
@@ -302,6 +302,10 @@ void Sensor::get_scanned_profile(ScannedProfile& profile, int timeout) {
     if (response < 0) {
         throw SensorException("Failed to get scanned profile. Error code: " + std::to_string(response));
     }
+    std::cout << "Raw intensity from sensor before copying to profile:\n";
+    for (int i = 0; i < response && i < 1280; ++i) {
+        std::cout << "Sensor Intensity[" << i << "] = " << intensity[i] << std::endl;
+    }
     profile.encoderValue = *encoderValue;
     profile.userIOState = UserIOState(
         ((*userIOState) & 0b1),
@@ -312,9 +316,14 @@ void Sensor::get_scanned_profile(ScannedProfile& profile, int timeout) {
         ((*userIOState) & 0b100000) >> 5,
         ((*userIOState) & 0b1000000) >> 6
     );
+    profile.roiWidthX.resize(response);
+    profile.roiHeightZ.resize(response);
+    profile.intensity.resize(response);
+    profile.signalWidth.resize(response);
     for (int i = 0; i < response; ++i) {
-        profile.roiWidthX[i] = roiWidthX[i];
+        profile.roiWidthX[i] = roiWidthX [i];
         profile.roiHeightZ[i] = roiHeightZ[i];
+        profile.intensity[i]=intensity[i];
     }
     profile.pictureCounter = *pictureCounter;
     profile.scannedPoints = response;
@@ -370,8 +379,14 @@ int main(int argc, char* argv[]) {
     rclcpp::init(argc, argv);
     signal(SIGINT, signal_handler);
     auto node = rclcpp::Node::make_shared("wecat3d_runtime_node");
-    auto pub = node->create_publisher<sensor_msgs::msg::PointCloud2>("/wecat3d/pointcloud", 10);
-    std::ofstream pcd_file("merged_encoder_output.pcd", std::ios::out | std::ios::trunc);
+    auto pub = node->create_publisher<sensor_msgs::msg::PointCloud2>("/wenglor1/pointcloud", 10);
+    std::string output_dir = "/tmp";  
+    char* pcd_output_dir = std::getenv("PCD_OUTPUT_DIR");
+    if (pcd_output_dir != nullptr) {
+        output_dir = std::string(pcd_output_dir);
+    }
+    std::string pcd_filename = output_dir + "/merged_encoder_output.pcd";
+    std::ofstream pcd_file(pcd_filename, std::ios::out | std::ios::trunc);
     if (!pcd_file.is_open()) {
         std::cerr << "Failed to open PCD file for writing!" << std::endl;
         return 1;
@@ -379,10 +394,10 @@ int main(int argc, char* argv[]) {
     std::streampos header_start = pcd_file.tellp();
     pcd_file << "# .PCD v0.7 - Point Cloud Data file\n";
     pcd_file << "VERSION 0.7\n";
-    pcd_file << "FIELDS x y z\n";
-    pcd_file << "SIZE 4 4 4\n";
-    pcd_file << "TYPE F F F\n";
-    pcd_file << "COUNT 1 1 1\n";
+    pcd_file << "FIELDS x y z intensity\n";
+    pcd_file << "SIZE 4 4 4 4\n";
+    pcd_file << "TYPE F F F I\n";
+    pcd_file << "COUNT 1 1 1 1\n";
     pcd_file << "WIDTH 0000000000\n";
     pcd_file << "HEIGHT 1\n";
     pcd_file << "VIEWPOINT 0 0 0 1 0 0 0\n";
@@ -396,18 +411,20 @@ int main(int argc, char* argv[]) {
         return 1;
     }
     try {
-        Sensor sensor("192.168.100.1", 32001);
+        Sensor sensor("192.168.171.51", 32001);
         sensor.connect(0);
         sensor.write_data("SetHeartbeat=1000");
         sensor.write_data("SetExposureTime=750");
         sensor.write_data("SetTriggerSource=2");
-        sensor.write_data("SetTriggerEncoderStep=20");
+        sensor.write_data("SetTriggerEncoderStep=0");
         sensor.write_data("SetEncoderTriggerFunction=2");
         sensor.write_data("ResetEncoder");
         sensor.write_data("SetRangeImageNrProfiles=1");
         sensor.write_data("SetAcquisitionStart");
         int scanNo = 0;
         int64_t last_encoder = std::numeric_limits<int64_t>::min();
+        bool first_scan = true;
+        int64_t encoder_offset = 0;
         sensor_msgs::msg::PointCloud2 msg;
         sensor_msgs::PointCloud2Modifier mod(msg);
         mod.setPointCloud2FieldsByString(1, "xyz");
@@ -421,25 +438,35 @@ int main(int argc, char* argv[]) {
         while (!stop) {
             try {
                 sensor.get_scanned_profile(scan, 1000);
+                std::cout << "Raw intensity from sensor before after copying to profile:\n";
+                for (int i = 0; i < scan.scannedPoints && i < 1280; ++i) {
+                    std::cout << "Sensor Intensity[" << i << "] = " << scan.intensity[i] << std::endl;
+                }
                 scanNo++;
-                const std::vector<float>& x_values = scan.roiWidthX;
-                const std::vector<float>& z_values = scan.roiHeightZ;
+                size_t n_valid = scan.scannedPoints;
+                std::vector<double>& x_values = scan.roiWidthX;
+                std::vector<double>& z_values = scan.roiHeightZ;
                 uint32_t encoder_unsigned = scan.encoderValue;
                 int64_t encoder = static_cast<int64_t>(encoder_unsigned);
+
                 if (encoder_unsigned >= static_cast<uint32_t>(1ULL << 31)) {
                     encoder -= static_cast<int64_t>(1ULL << 32);
                 }
-                if (last_encoder != std::numeric_limits<int64_t>::min()) {
-                    int64_t delta_encoder = encoder - last_encoder;
-                    double delta_microns = delta_encoder * (ENC_SCALE_MM * 1000.0);
+
+                if (first_scan) {
+                    encoder_offset = encoder;
+                    first_scan = false;
+                    std::cout << "Starting encoder offset: " << encoder_offset << std::endl;
                 }
+                int64_t encoder_relative = encoder - encoder_offset;
                 if (last_encoder == std::numeric_limits<int64_t>::min() || encoder != last_encoder) {
-                    double y_value = encoder * ENC_SCALE_MM;
-                    for (size_t i = 0; i < x_values.size(); ++i) {
+                    double y_value = encoder_relative * ENC_SCALE_MM;
+                     for (size_t i = 0; i < n_valid; ++i) {
                         pcd_file << std::fixed << std::setprecision(6)
                                 << x_values[i] << " "
                                 << y_value << " "
-                                << z_values[i] << "\n";
+                                << z_values[i] << " "
+                                << scan.intensity[i]  << "\n";
                     }
                     pcd_file.flush();
                     total_points += x_values.size();
@@ -475,10 +502,10 @@ int main(int argc, char* argv[]) {
         pcd_file.seekp(header_start);
         pcd_file << "# .PCD v0.7 - Point Cloud Data file\n";
         pcd_file << "VERSION 0.7\n";
-        pcd_file << "FIELDS x y z\n";
-        pcd_file << "SIZE 4 4 4\n";
-        pcd_file << "TYPE F F F\n";
-        pcd_file << "COUNT 1 1 1\n";
+        pcd_file << "FIELDS x y z intensity\n";
+        pcd_file << "SIZE 4 4 4 4\n";
+        pcd_file << "TYPE F F F I\n";
+        pcd_file << "COUNT 1 1 1 1\n";
         pcd_file << "WIDTH " << std::setw(10) << std::setfill('0') << total_points << "\n";
         pcd_file << "HEIGHT 1\n";
         pcd_file << "VIEWPOINT 0 0 0 1 0 0 0\n";
