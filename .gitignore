@@ -3,4 +3,4 @@ install/
 log/
 .vscode/
 merged_encoder_output.pcd
-pcds/
+pcd_output/
