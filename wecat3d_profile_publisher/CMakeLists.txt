@@ -122,25 +122,25 @@ install(
   DESTINATION lib/${PROJECT_NAME}
 )
 
-install(
-  PROGRAMS   scripts/video_output_basler.py
-  DESTINATION lib/${PROJECT_NAME}
-)
+# install(
+#   PROGRAMS   scripts/video_output_basler.py
+#   DESTINATION lib/${PROJECT_NAME}
+# )
 
-install(
-  PROGRAMS scripts/camera_inference.py
-  DESTINATION share/${PROJECT_NAME}/camera_inference
-)
+# install(
+#   PROGRAMS scripts/camera_inference.py
+#   DESTINATION share/${PROJECT_NAME}/camera_inference
+# )
 
 install(
   DIRECTORY launch
   DESTINATION share/${PROJECT_NAME}
 )
 
-install(PROGRAMS
-  scripts/detection_data_logging.py
-  DESTINATION lib/${PROJECT_NAME}
-)
+# install(PROGRAMS
+#   scripts/detection_data_logging.py
+#   DESTINATION lib/${PROJECT_NAME}
+# )
 ##############################################################################
 # Install Python nodes (drishti_odometry & combined_wenglor)
 ##############################################################################
