@@ -3,3 +3,6 @@ install/
 log/
 .vscode/
 merged_encoder_output.pcd
+*.mp4
+merged_encoder_output_on_final_railway_profile_first.pcd
+pointcloud_log.txt
