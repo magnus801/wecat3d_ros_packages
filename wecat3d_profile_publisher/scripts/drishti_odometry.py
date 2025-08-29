@@ -50,7 +50,6 @@ class CloudToPose(Node):
             return  
 
         y_m = struct.unpack_from('<f', cloud.data, self._y_offset)[0]
-        y_mm = y_m*200
 
         stamp = self.get_clock().now().to_msg()
 
@@ -58,7 +57,7 @@ class CloudToPose(Node):
         pose_msg = PoseWithCovarianceStamped()
         pose_msg.header.stamp    = stamp
         pose_msg.header.frame_id = self.odom_frame
-        pose_msg.pose.pose.position.x = y_mm     
+        pose_msg.pose.pose.position.x = y_m     
         pose_msg.pose.pose.orientation.w = 1.0      
 
         cov = [0.0]*36
@@ -69,14 +68,14 @@ class CloudToPose(Node):
         cov[28] = 3.14      
         cov[35] = 3.14      
         pose_msg.pose.covariance = cov
-        print(y_mm)
+        # print(y_mm)
         self.pose_pub.publish(pose_msg)
 
         if self.tf_broadcaster:
             tf = TransformStamped()
             tf.header        = pose_msg.header
             tf.child_frame_id = self.base_frame
-            tf.transform.translation.x = y_mm
+            tf.transform.translation.x = y_m
             tf.transform.rotation.w    = 1.0
             self.tf_broadcaster.sendTransform(tf)
 

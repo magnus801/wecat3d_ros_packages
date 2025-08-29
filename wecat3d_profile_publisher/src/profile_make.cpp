@@ -402,9 +402,9 @@ void Sensor::get_scanned_profile(ScannedProfile& profile, int timeout) {
     if (response < 0) {
         throw SensorException("Failed to get scanned profile. Error code: " + std::to_string(response));
     }
-    std::cout  << "fifo state after : " << p_EthernetScanner_GetDllFiFoState(handle) << "\n";
+    // std::cout  << "fifo state after : " << p_EthernetScanner_GetDllFiFoState(handle) << "\n";
 
-    std::cout << "Scanned profile received successfully with response: " << response << "\n";
+    // std::cout << "Scanned profile received successfully with response: " << response << "\n";
 
     profile.encoderValue = *encoderValue;
     profile.userIOState = UserIOState(
@@ -521,6 +521,14 @@ int main(int argc, char* argv[]) {
         sensor.write_data("SetROI1_mm=-45,100,60,180");
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
         // SetROI1_mm=-45,100,60,180
+        // SetROI1_mm=-45,100,10,150
+        // SetROI1_mm=-15,100,10,150 1621hz
+        // SetROI1_mm=20,140,40,160 2888hz
+        // SetROI1_mm=-50,100,0,280 1548hz
+        // SetROI1_mm=-50,150,50,250
+        // SetROI1_mm=-15,150,15,250 1592hz
+        // SetROI1_mm=-15,150,40,250 1170hz for gauge length
+        // SetROI1_mm=-25,150,25,250 1295 Hz
         // sensor.write_data("SetROI1WidthX=1072");
         // sensor.write_data("SetROI1HeightZ=524");
         // sensor.write_data("SetROI1OffsetX=128");
@@ -533,7 +541,7 @@ int main(int argc, char* argv[]) {
         sensor.write_data("ResetEncoder");
         sensor.write_data("SetTriggerSource=2");
         sensor.write_data("SetTriggerEncoderStep=0");
-        sensor.write_data("SetEncoderTriggerFunction=2");
+        sensor.write_data("SetEncoderTriggerFunction=0");
         sensor.write_data("SetEA1Function=5");
         sensor.write_data("SetEA2Function=5");
         sensor.write_data("SetRangeImageNrProfiles=1");
@@ -549,7 +557,7 @@ int main(int argc, char* argv[]) {
         msg.height = 1;
         msg.is_dense = false;
         msg.is_bigendian = false;
-        const float scale_factor = 5.0f / 1000.0f;
+        const float scale_factor = 1.0f / 1000.0f;
         const double MIN_Z_MM = std::numeric_limits<double>::min(); 
 
         std::signal(SIGINT, signal_handler);
@@ -575,13 +583,13 @@ int main(int argc, char* argv[]) {
                 if (first_scan) {
                     encoder_offset = encoder;
                     first_scan = false;
-                    std::cout << "Starting encoder offset: " << encoder_offset << std::endl;
+                    // std::cout << "Starting encoder offset: " << encoder_offset << std::endl;
                 }
                 int64_t encoder_relative = encoder - encoder_offset;
-                std::cout << " Encoder: " << encoder_relative << std::endl;
+                // std::cout << " Encoder: " << encoder_relative << std::endl;
                 if (last_encoder == std::numeric_limits<int64_t>::min() || encoder != last_encoder) {
                     double y_value = encoder_relative * ENC_SCALE_MM;
-                    std::cout << "Processed " << y_value << std::endl;
+                    // std::cout << "Processed " << y_value << std::endl;
                     size_t actual_pts = 0;
                      for (size_t i = 0; i < n_valid; ++i) {
                         if(std::abs(z_values[i]) >= MIN_Z_MM)
@@ -596,11 +604,6 @@ int main(int argc, char* argv[]) {
                         }
                     pcd_file.flush();
                     total_points += actual_pts;
-
-                    // if (msg.width != n_valid) {
-                    //     msg.width = n_valid;
-                    //     mod.resize(n_valid);
-                    // }
                     size_t valid_points=0;
                     for (size_t i = 0; i < n_valid; ++i)
                         if (std::abs(z_values[i]) >= MIN_Z_MM)
@@ -614,17 +617,9 @@ int main(int argc, char* argv[]) {
                     float y_scaled = y_value * scale_factor;
                     for (size_t i = 0; i < n_valid; ++i) {
                         if(std::abs(z_values[i]) < MIN_Z_MM) continue;
-                        // {
                             *it_x = x_values[i] * scale_factor;                        *it_y = y_scaled;
                             *it_z = z_values[i] * scale_factor;
                             ++it_x; ++it_y; ++it_z;
-                            // }fifo
-                    //         else                                            
-                    //         {
-                    //             *it_x = NaN;
-                    //             *it_y = NaN;
-                    //             *it_z = NaN;
-                    //         } 
                     }
                     msg.width  = valid_points;
                     msg.row_step = msg.point_step * msg.width;
@@ -632,7 +627,7 @@ int main(int argc, char* argv[]) {
                     msg.header.stamp = node->now();
                     pub->publish(msg);
                     if (scanNo % 500 == 0) {
-                        std::cout << "Processed " << scanNo << " scans, total points: " << total_points << std::endl;
+                        // std::cout << "Processed " << scanNo << " scans, total points: " << total_points << std::endl;
                     }
                 }
                 last_encoder = encoder;
@@ -659,7 +654,7 @@ int main(int argc, char* argv[]) {
         pcd_file << "DATA ascii\n";
         pcd_file.close();
         std::cout << "Final PCD saved with " << total_points << " points" << std::endl;
-        std::cout << "NO. OF SCANS!!" << scanNo << " scans" << std::endl;
+        // std::cout << "NO. OF SCANS!!" << scanNo << " scans" << std::endl;
         std::cout << "Getting connection status..." << std::endl;
         int status = sensor.get_connect_status();
         if (status == SENSOR_CONNECTED) {
@@ -668,7 +663,7 @@ int main(int argc, char* argv[]) {
             std::cout << "Sensor is NOT connected after attempt." << std::endl;
         }
         sensor.write_data("SetAcquisitionStop");
-        // sensor.write_data("SetResetSettings");
+        sensor.write_data("SetResetSettings");
         sensor.disconnect();
         rclcpp::shutdown();
     } catch (const std::exception& e) {
