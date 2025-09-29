@@ -6,9 +6,12 @@ import struct
 import signal
 import os
 from std_msgs.msg import Header
+import numpy as np
 
-MIN_X = -0.039
-MAX_X = 0.000
+theta_L = np.deg2rad(135.0)           # rotation around Y‑axis
+cL, sL  = np.cos(theta_L), np.sin(theta_L)
+MIN_X = -0.500
+MAX_X = 0.200
 
 stop_requested = False
 
@@ -57,24 +60,38 @@ class SimplePointCloudLogger(Node):
         self.counter = 0
         self.subscription = self.create_subscription(
             PointCloud2,
-            '/wecat3d/pointcloud',
+            '/wenglor2/pointcloud',
             self.pointcloud_callback,
             10
         )
         self.cloud_pub = self.create_publisher(PointCloud2, '/wecat3d/gauge_cloud', 10)
 
     def pointcloud_callback(self, msg):
+        # -------- 1. extract & crop in X --------------------------------
         points = get_xyz_points(msg)
-        filtered_points = [(x, y, z) for x, y, z in points if MIN_X <= x <= MAX_X]
+        points = [(x, y, z) for x, y, z in points if MIN_X <= x <= MAX_X]
 
-        for _, _, z in filtered_points:
+        if not points:                      # nothing left – publish empty cloud
+            empty = create_pointcloud2([], "map", msg.header.stamp)
+            self.cloud_pub.publish(empty)
+            return
+
+        # -------- 2. rotate about Y‑axis by −48 ° ------------------------
+        pts = np.asarray(points, dtype=np.float32)        # shape (N,3)
+        x, z = pts[:, 0].copy(), pts[:, 2].copy()
+        pts[:, 0] =  cL * x +  sL * z     # X′
+        pts[:, 2] = -sL * x +  cL * z     # Z′
+
+        # keep y as‑is; pts[:,1] untouched
+        rotated_points = pts.tolist()                      # back to list[tuple]
+
+        # -------- 3. log Z and publish ----------------------------------
+        for _, _, z in rotated_points:
             self.file.write(f"{z:.6f}\n")
-
         self.file.flush()
-        self.counter += 1
 
         cloud_out = create_pointcloud2(
-            points=filtered_points,
+            points=rotated_points,
             frame_id="map",
             stamp=msg.header.stamp
         )

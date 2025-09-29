@@ -14,6 +14,7 @@
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
 #include <sensor_msgs/point_cloud2_iterator.hpp>
+#include <rclcpp/qos.hpp> 
 #include <pcl/point_cloud.h>
 #include <pcl/io/pcd_io.h>
 #include <dlfcn.h>
@@ -25,7 +26,7 @@
 #define WIDTH_X 1280
 #define HEIGHT_Z 1024
 #define SENSOR_BUFFERSIZEMAX 4202500
-#define ENC_SCALE_MM 0.047
+#define ENC_SCALE_MM 0.062
 #define PCD_FILE "merged.pcd"
 #define SENSOR_OK 0
 #define SENSOR_ERROR -1
@@ -46,6 +47,8 @@
 #define SENSOR_GETINFOSMALLERBUFFER -2
 #define SENSOR_CONNECTED 3
 #define SENSOR_DISCONNECTED 0
+#define INTENSITY_THRESHOLD 25 
+
 
 extern volatile bool keep_running;
 extern volatile sig_atomic_t stop;

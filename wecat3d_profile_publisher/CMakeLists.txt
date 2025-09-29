@@ -63,10 +63,14 @@ add_executable(profile_generator src/profile_generator.cpp)
 target_link_libraries(profile_generator profile_generator_lib)
 ament_target_dependencies(profile_generator rclcpp)
 
+add_executable(profile_make src/profile_make.cpp)
+target_link_libraries(profile_make profile_generator_lib)
+ament_target_dependencies(profile_make rclcpp)
 # ======== Installation ========
 install(TARGETS 
   profile_publisher_node
   profile_generator
+  profile_make
   DESTINATION lib/${PROJECT_NAME}
 )
 
@@ -104,7 +108,46 @@ install(
 )
 
 install(
+  PROGRAMS   scripts/testing_combined.py
+  DESTINATION lib/${PROJECT_NAME}
+)
+
+install(
+  PROGRAMS   scripts/publish_pcd.py
+  DESTINATION lib/${PROJECT_NAME}
+)
+
+install(
   PROGRAMS scripts/drishti_odometry.py
+  DESTINATION lib/${PROJECT_NAME}
+)
+
+install(
+  PROGRAMS   scripts/video_output_basler.py
+  DESTINATION lib/${PROJECT_NAME}
+)
+
+install(
+  PROGRAMS scripts/camera_inference.py
+  DESTINATION share/${PROJECT_NAME}/camera_inference
+)
+
+install(
+  DIRECTORY launch
+  DESTINATION share/${PROJECT_NAME}
+)
+
+install(PROGRAMS
+  scripts/detection_data_logging.py
+  DESTINATION lib/${PROJECT_NAME}
+)
+##############################################################################
+# Install Python nodes (drishti_odometry & combined_wenglor)
+##############################################################################
+install(
+  PROGRAMS
+    scripts/drishti_odometry.py
+    scripts/combined_wenglor.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

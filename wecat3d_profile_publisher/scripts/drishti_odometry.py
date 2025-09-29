@@ -5,7 +5,6 @@ from rclpy.node import Node
 from sensor_msgs.msg import PointCloud2
 from geometry_msgs.msg import PoseWithCovarianceStamped, TransformStamped
 from tf2_ros import TransformBroadcaster
-from rclpy.qos import qos_profile_sensor_data
 
 
 class CloudToPose(Node):
@@ -13,8 +12,8 @@ class CloudToPose(Node):
         super().__init__("cloud_to_pose")
 
         # ---------- parameters ----------
-        self.declare_parameter("odom_frame",  "odom")
-        self.declare_parameter("base_frame",  "base_link")
+        self.declare_parameter("odom_frame",  "livox_frame")
+        self.declare_parameter("base_frame",  "livox")
         self.declare_parameter("publish_tf",  True)
 
         self.odom_frame = self.get_parameter("odom_frame").get_parameter_value().string_value
@@ -27,9 +26,9 @@ class CloudToPose(Node):
 
         # ---------- subscriber ----------
         self.create_subscription(PointCloud2,
-                                 "/wenglor1/pointcloud",
+                                 "/wenglor2/pointcloud",
                                  self.cloud_cb,
-                                 qos_profile_sensor_data)
+                                 10)
 
         self.tf_broadcaster = TransformBroadcaster(self) if self.publish_tf else None
 
@@ -51,6 +50,7 @@ class CloudToPose(Node):
             return  
 
         y_m = struct.unpack_from('<f', cloud.data, self._y_offset)[0]
+        y_mm = y_m*200
 
         stamp = self.get_clock().now().to_msg()
 
@@ -58,7 +58,7 @@ class CloudToPose(Node):
         pose_msg = PoseWithCovarianceStamped()
         pose_msg.header.stamp    = stamp
         pose_msg.header.frame_id = self.odom_frame
-        pose_msg.pose.pose.position.x = y_m      
+        pose_msg.pose.pose.position.x = y_mm     
         pose_msg.pose.pose.orientation.w = 1.0      
 
         cov = [0.0]*36
@@ -69,14 +69,14 @@ class CloudToPose(Node):
         cov[28] = 3.14      
         cov[35] = 3.14      
         pose_msg.pose.covariance = cov
-
+        # print(y_mm)
         self.pose_pub.publish(pose_msg)
 
         if self.tf_broadcaster:
             tf = TransformStamped()
             tf.header        = pose_msg.header
             tf.child_frame_id = self.base_frame
-            tf.transform.translation.x = y_m
+            tf.transform.translation.x = y_mm
             tf.transform.rotation.w    = 1.0
             self.tf_broadcaster.sendTransform(tf)
 

@@ -302,10 +302,6 @@ void Sensor::get_scanned_profile(ScannedProfile& profile, int timeout) {
     if (response < 0) {
         throw SensorException("Failed to get scanned profile. Error code: " + std::to_string(response));
     }
-    std::cout << "Raw intensity from sensor before copying to profile:\n";
-    for (int i = 0; i < response && i < 1280; ++i) {
-        std::cout << "Sensor Intensity[" << i << "] = " << intensity[i] << std::endl;
-    }
     profile.encoderValue = *encoderValue;
     profile.userIOState = UserIOState(
         ((*userIOState) & 0b1),
@@ -378,14 +374,17 @@ int Sensor::write_data(const std::string& command) {
 int main(int argc, char* argv[]) {
     rclcpp::init(argc, argv);
     signal(SIGINT, signal_handler);
+    // rclcpp::QoS qos(rclcpp::KeepLast(1));
+    // qos.best_effort();          // drop if subscriber can’t keep up
+    // qos.durability_volatile(); 
     auto node = rclcpp::Node::make_shared("wecat3d_runtime_node");
-    auto pub = node->create_publisher<sensor_msgs::msg::PointCloud2>("/wenglor2/pointcloud", 10);
+    auto pub = node->create_publisher<sensor_msgs::msg::PointCloud2>("/wenglor1/pointcloud", 10);
     std::string output_dir = "/tmp";  
     char* pcd_output_dir = std::getenv("PCD_OUTPUT_DIR");
     if (pcd_output_dir != nullptr) {
         output_dir = std::string(pcd_output_dir);
     }
-    std::string pcd_filename = output_dir + "/merged_encoder_output.pcd";
+    std::string pcd_filename = output_dir + "/merged_encoder_output_wenglor2.pcd";
     std::ofstream pcd_file(pcd_filename, std::ios::out | std::ios::trunc);
     if (!pcd_file.is_open()) {
         std::cerr << "Failed to open PCD file for writing!" << std::endl;
@@ -411,9 +410,13 @@ int main(int argc, char* argv[]) {
         return 1;
     }
     try {
-        Sensor sensor("192.168.171.52", 32001);
+        Sensor sensor("192.168.171.51", 32001);
         sensor.connect(0);
         sensor.write_data("SetHeartbeat=1000");
+        sensor.write_data("SetAcquisitionStop");
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        sensor.write_data("SetExposureTime=750");
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
         sensor.write_data("SetExposureTime=750");
         sensor.write_data("SetTriggerSource=2");
         sensor.write_data("SetTriggerEncoderStep=0");
@@ -432,16 +435,14 @@ int main(int argc, char* argv[]) {
         msg.height = 1;
         msg.is_dense = false;
         msg.is_bigendian = false;
-        const float scale_factor = 1.0f / 1000.0f;
+        const float scale_factor = 5.0f / 1000.0f;
+        const double MIN_Z_MM = std::numeric_limits<double>::min(); 
+        const float NaN = std::numeric_limits<float>::quiet_NaN();
         std::signal(SIGINT, signal_handler);
         ScannedProfile scan(1280, 1024);
         while (!stop) {
             try {
                 sensor.get_scanned_profile(scan, 1000);
-                std::cout << "Raw intensity from sensor before after copying to profile:\n";
-                for (int i = 0; i < scan.scannedPoints && i < 1280; ++i) {
-                    std::cout << "Sensor Intensity[" << i << "] = " << scan.intensity[i] << std::endl;
-                }
                 scanNo++;
                 size_t n_valid = scan.scannedPoints;
                 std::vector<double>& x_values = scan.roiWidthX;
@@ -461,29 +462,49 @@ int main(int argc, char* argv[]) {
                 int64_t encoder_relative = encoder - encoder_offset;
                 if (last_encoder == std::numeric_limits<int64_t>::min() || encoder != last_encoder) {
                     double y_value = encoder_relative * ENC_SCALE_MM;
+                    size_t actual_pts = 0;
                      for (size_t i = 0; i < n_valid; ++i) {
+                        if(std::abs(z_values[i]) >= MIN_Z_MM)
+                        {
                         pcd_file << std::fixed << std::setprecision(6)
                                 << x_values[i] << " "
                                 << y_value << " "
                                 << z_values[i] << " "
                                 << scan.intensity[i]  << "\n";
+                            actual_pts++;
+                        }
                     }
                     pcd_file.flush();
-                    total_points += x_values.size();
-                    msg.header.stamp = node->now();
-                    if (msg.width != x_values.size()) {
-                        msg.width = x_values.size();
-                        mod.resize(x_values.size());
-                    }
+                    total_points += actual_pts;
+                    size_t valid_points=0;
+                    for (size_t i = 0; i < n_valid; ++i)
+                        if (std::abs(z_values[i]) >= MIN_Z_MM)
+                            ++valid_points;
+
+                    /* resize the buffer to EXACTLY that many points */
+                    mod.resize(valid_points);
                     sensor_msgs::PointCloud2Iterator<float> it_x(msg, "x");
                     sensor_msgs::PointCloud2Iterator<float> it_y(msg, "y");
                     sensor_msgs::PointCloud2Iterator<float> it_z(msg, "z");
                     float y_scaled = y_value * scale_factor;
-                    for (size_t i = 0; i < x_values.size(); ++i, ++it_x, ++it_y, ++it_z) {
-                        *it_x = x_values[i] * scale_factor;
-                        *it_y = y_scaled;
-                        *it_z = z_values[i] * scale_factor;
+                    for (size_t i = 0; i < n_valid; ++i) {
+                        if(std::abs(z_values[i]) < MIN_Z_MM) continue;
+                        // {
+                            *it_x = x_values[i] * scale_factor;                        *it_y = y_scaled;
+                            *it_z = z_values[i] * scale_factor;
+                            ++it_x; ++it_y; ++it_z;
+                            // }fifo
+                    //         else                                            
+                    //         {
+                    //             *it_x = NaN;
+                    //             *it_y = NaN;
+                    //             *it_z = NaN;
+                    //         } 
                     }
+                    msg.width  = valid_points;
+                    msg.row_step = msg.point_step * msg.width;
+                    msg.is_dense = true; 
+                    msg.header.stamp = node->now();
                     pub->publish(msg);
                     if (scanNo % 500 == 0) {
                         std::cout << "Processed " << scanNo << " scans, total points: " << total_points << std::endl;

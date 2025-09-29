@@ -133,7 +133,7 @@ class PointCloudPublisher(Node):
             self.get_logger().info(f'Published point cloud with {len(points)} points')
 
 # lib = cdll.LoadLibrary(os.path.join(os.getcwd(), 'EthernetScanner.dll')) if platform.system() == "Windows" else cdll.LoadLibrary(os.path.join(os.getcwd(), 'libEthernetScanner.so'))
-lib_path = "/home/strix-0/wenglor_ws/wecat3d_ros_packages/src/wecat3d_sdk/lib/libEthernetScanner.so"
+lib_path = "/home/combat/wenglor_workspace/new_wenglor_ws/src/wecat3d_ros_packages/wecat3d_sdk/lib/libEthernetScanner.so"
 lib = cdll.LoadLibrary(lib_path)
 
 EthernetScanner_Connect = lib.EthernetScanner_Connect
@@ -369,13 +369,15 @@ def main():
     ros_thread.daemon = True
     ros_thread.start()
     
-    ipaddress = "192.168.100.1"
+    ipaddress = "192.168.171.51"
     sensor = Sensor(ipaddress, 32001)
     print(f'DLL Version: {sensor.get_dll_version()}')
     sensor.connect(timeout=0)
     sensor.write_data("SetHeartbeat=1000")
     print(f"Sensor status: {sensor.get_connect_status()}")
     sensor.write_data("SetAcquisitionStop")
+    sensor.write_data("SetROI1WidthX=992")
+    sensor.write_data("SetROI1HeightZ=1024")
     time.sleep(0.5)
     print(f'Order number: {sensor.read_data("GetOrderNumber")}')
     print(f'Firmware Version: {sensor.read_data("GetFirmwareVersion")}')
@@ -384,7 +386,7 @@ def main():
     sensor.write_data("SetExposureTime=750")
     print(f'Exposure Time: {sensor.read_data("GetExposureTime")}')
     sensor.write_data("SetTriggerSource=2")
-    sensor.write_data("SetTriggerEncoderStep=20")
+    sensor.write_data("SetTriggerEncoderStep=0")
     sensor.write_data("SetEncoderTriggerFunction=2")
     sensor.write_data("ResetEncoder")
     sensor.write_data("SetRangeImageNrProfiles=1")
@@ -427,7 +429,7 @@ def main():
                     
                     # Filter points by intensity and convert to meters (similar to C++ code)
                     for i in range(len(x_values)):
-                        if intensity_values[i] >= INTENSITY_THRESHOLD:  # Skip low-intensity points
+                        if z_values[i] <= 100 and z_values[i]>10:  # Skip low-intensity points
                             x = float(x_values[i] / 1000.0)  # Convert to meters
                             y = float(y_value / 1000.0)      # Convert to meters
                             z = float(z_values[i] / 1000.0)  # Convert to meters
